@@ -1,0 +1,14 @@
+{
+  "poll_seconds": 10,
+  "quiet_seconds": 300,
+  "required_polls": 3,
+  "countdown_seconds": 90,
+  "action": "shutdown",
+  "dry_run": true,
+  "require_human_idle": true,
+  "human_idle_required": 600,
+  "allow_zero_sessions": false,
+  "force_close_apps": true,
+  "guard_patterns": [],
+  "arm_on_start": false
+}

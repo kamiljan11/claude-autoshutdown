@@ -1,0 +1,21 @@
+[project]
+name = "claude-autoshutdown"
+version = "1.0.0"
+description = "Shut down Windows only after every Claude Code session and subagent has really finished"
+readme = "README.md"
+requires-python = ">=3.14"
+license = { file = "LICENSE" }
+keywords = [
+    "claude-code", "anthropic", "ai-agents", "automation", "windows",
+    "shutdown", "power-management", "tkinter", "unattended", "monitoring",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+testpaths = ["."]
