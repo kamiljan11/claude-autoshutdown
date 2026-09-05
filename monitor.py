@@ -24,6 +24,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from i18n import t
 from winprobe import FILETIME_PER_SECOND, ProcInfo, probe_process
 
 # Tolerancja porownania czasu startu procesu (1 s) - chroni przed recyklingiem PID.
@@ -73,29 +74,35 @@ class Session:
     active_subagents: int
     working: bool
     turn: str = TURN_UNKNOWN  # CLOSED / OPEN / UNKNOWN
-    turn_reason: str = ""     # dlaczego, po ludzku
+    turn_reason: str = ""     # KLUCZ i18n (t(turn_reason, **turn_params) daje tekst)
+    turn_params: dict = field(default_factory=dict)
+
+    @property
+    def turn_text(self) -> str:
+        return t(self.turn_reason, **self.turn_params) if self.turn_reason else ""
 
     @property
     def state(self) -> str:
-        return "PRACUJE" if self.working else "BEZCZYNNA"
+        return t("state.working") if self.working else t("state.idle")
 
     @property
     def why(self) -> str:
         """Powod stanu - to trafia do kolumny w GUI."""
         if not self.working:
-            return self.turn_reason or "cisza"
+            return self.turn_text or t("why.silence")
         if self.turn == TURN_OPEN:
             # Przerwana tura (np. Esc w trakcie narzedzia) zostaje OPEN na zawsze
             # i blokuje wylaczenie. Nie zgadujemy za uzytkownika - pokazujemy,
             # jak dlugo to trwa, zeby sam zobaczyl porzucona sesje.
             if self.silence > 3600:
-                return f"{self.turn_reason} - blokuje od {fmt_duration(self.silence)}"
-            return self.turn_reason
+                return t("why.blocking_since", reason=self.turn_text,
+                         duration=fmt_duration(self.silence))
+            return self.turn_text
         if self.active_subagents:
-            return f"{self.active_subagents} subagent(ow) pisze"
+            return t("why.subagents_writing", n=self.active_subagents)
         if self.turn == TURN_UNKNOWN:
-            return f"nieznany stan tury: {self.turn_reason}"
-        return "swiezy zapis w transkrypcie"
+            return t("why.unknown_turn", reason=self.turn_text)
+        return t("why.fresh_write")
 
     @property
     def short_cwd(self) -> str:
@@ -103,7 +110,7 @@ class Session:
 
     @property
     def surface(self) -> str:
-        return "Cowork" if self.entrypoint == "claude-desktop" else "CLI"
+        return t("surface.cowork") if self.entrypoint == "claude-desktop" else t("surface.cli")
 
 
 @dataclass
@@ -160,7 +167,7 @@ class SessionScanner:
         self._transcript_cache: dict[str, Path] = {}
         self._cpu_prev: dict[int, tuple[int, float]] = {}
         self._cpu_last: dict[int, float] = {}
-        self._turn_cache: dict[str, tuple[float, str, str]] = {}
+        self._turn_cache: dict[str, tuple[float, str, str, dict]] = {}
         self.last_error: str = ""
         # Kontrola krzyzowa z lista procesow systemu ma sens tylko wtedy, gdy
         # czytamy PRAWDZIWY rejestr uzytkownika. Przy podmienionym katalogu (test,
@@ -209,17 +216,18 @@ class SessionScanner:
                 active += 1
         return newest, active
 
-    def _turn_state_cached(self, transcript: Path | None, mtime: float) -> tuple[str, str]:
+    def _turn_state_cached(self, transcript: Path | None, mtime: float,
+                           ) -> tuple[str, str, dict]:
         """Ogon transkryptu czytamy tylko gdy plik sie zmienil (bywa >200 MB)."""
         if transcript is None:
-            return TURN_UNKNOWN, "brak transkryptu"
+            return TURN_UNKNOWN, "turn.no_transcript", {}
         key = str(transcript)
         cached = self._turn_cache.get(key)
         if cached and cached[0] == mtime:
-            return cached[1], cached[2]
-        state, reason = turn_state(transcript)
-        self._turn_cache[key] = (mtime, state, reason)
-        return state, reason
+            return cached[1], cached[2], cached[3]
+        state, reason, params = turn_state(transcript)
+        self._turn_cache[key] = (mtime, state, reason, params)
+        return state, reason, params
 
     def _cpu_percent(self, proc: ProcInfo) -> float:
         """Srednie zuzycie CPU miedzy dwoma odczytami.
@@ -309,7 +317,8 @@ class SessionScanner:
             last_activity = max(transcript_mtime, sub_mtime, started_at)
             silence = max(0.0, now - last_activity) if last_activity else float("inf")
             cpu = self._cpu_percent(proc)
-            turn, turn_reason = self._turn_state_cached(transcript, transcript_mtime)
+            turn, turn_reason, turn_params = self._turn_state_cached(
+                transcript, transcript_mtime)
             working = is_working(
                 turn=turn, silence=silence, quiet_seconds=quiet_seconds,
                 active_subagents=active_subs,
@@ -331,6 +340,7 @@ class SessionScanner:
                 working=working,
                 turn=turn,
                 turn_reason=turn_reason,
+                turn_params=turn_params,
             ))
 
         # Program chodzi calymi dobami, a sesji przybywa i ubywa. Bez sprzatania
@@ -377,27 +387,30 @@ def evaluate(
     """Zbiera wszystkie warunki. Akcja tylko gdy KAZDY jest zdany."""
     checks: list[tuple[str, bool, str]] = []
 
-    checks.append(("Uzbrojony", armed, "tak" if armed else "kliknij UZBROJ"))
-    checks.append(("Brak pliku STOP", not stop_file_present,
-                   "plik STOP blokuje akcje" if stop_file_present else "brak"))
+    checks.append((t("check.armed"), armed,
+                   t("check.armed.yes") if armed else t("check.armed.no")))
+    checks.append((t("check.no_stop_file"), not stop_file_present,
+                   t("check.no_stop_file.blocked") if stop_file_present
+                   else t("check.no_stop_file.ok")))
     # Awaria skanera daje pusta liste sesji, a pusta lista przechodzila wszystkie
     # ponizsze warunki. "Nic nie widze" nie moze znaczyc "nic nie pracuje".
-    checks.append(("Skaner bez bledow", not scan_error, scan_error or "czysto"))
+    checks.append((t("check.scanner_ok"), not scan_error,
+                   scan_error or t("check.scanner_ok.ok")))
     # Kontrola krzyzowa z systemem: proces sesji, ktorego nie ma w rejestrze,
     # bylby dla monitora niewidzialny. Lepiej zablokowac niz zgadywac.
     stray = unregistered_pids or []
     checks.append((
-        "Kazda sesja Claude widoczna w rejestrze",
+        t("check.registry"),
         not stray,
-        f"procesy bez wpisu: {stray}" if stray else "zgadza sie",
+        t("check.registry.stray", pids=stray) if stray else t("check.registry.ok"),
     ))
 
     working = [s for s in sessions if s.working]
     checks.append((
-        "Wszystkie sesje bezczynne",
+        t("check.all_idle"),
         not working,
         "; ".join(f"{s.name} [{s.short_cwd}] - {s.why}" for s in working) if working
-        else f"{len(sessions)} sesji w spoczynku",
+        else t("check.all_idle.ok", n=len(sessions)),
     ))
 
     # Nie tylko OPEN: UNKNOWN tez blokuje. Wczesniej sesja z nieczytelnym ogonem
@@ -405,18 +418,18 @@ def evaluate(
     # domkniete", chociaz nie wiedzial o niej nic.
     unclosed = [s for s in sessions if s.turn != TURN_CLOSED]
     checks.append((
-        "Kazda tura domknieta",
+        t("check.turns_closed"),
         not unclosed,
-        "; ".join(f"{s.name}: {s.turn_reason}" for s in unclosed) if unclosed
-        else f"{len(sessions)} tur domknietych (end_turn)",
+        "; ".join(f"{s.name}: {s.turn_text}" for s in unclosed) if unclosed
+        else t("check.turns_closed.ok", n=len(sessions)),
     ))
 
     if sessions:
         min_silence = min(s.silence for s in sessions)
         checks.append((
-            f"Cisza min. {int(quiet_seconds)}s w kazdej sesji",
+            t("check.quiet_each", s=int(quiet_seconds)),
             min_silence >= quiet_seconds,
-            f"najkrotsza cisza {fmt_duration(min_silence)}",
+            t("check.quiet_each.detail", d=fmt_duration(min_silence)),
         ))
     else:
         # Zero sesji nie moze byc szybsza sciezka do wylaczenia niz sesja bezczynna.
@@ -424,31 +437,33 @@ def evaluate(
         # czlowiek zdazylby zauwazyc, ze zamknal je przez pomylke albo ze cos padlo.
         quiet_enough = seconds_since_last_session >= quiet_seconds
         checks.append((
-            f"Cisza min. {int(quiet_seconds)}s od ostatniej sesji",
+            t("check.quiet_since_last", s=int(quiet_seconds)),
             bool(allow_zero_sessions or (saw_any_session and quiet_enough)),
-            "zero sesji od startu programu" if not saw_any_session
-            else f"ostatnia sesja zniknela {fmt_duration(seconds_since_last_session)} temu",
+            t("check.quiet_since_last.none") if not saw_any_session
+            else t("check.quiet_since_last.gone",
+                   d=fmt_duration(seconds_since_last_session)),
         ))
 
     if require_human_idle:
         idle_ok = human_idle < 0 or human_idle >= human_idle_required
         checks.append((
-            f"Uzytkownik nieaktywny min. {int(human_idle_required)}s",
+            t("check.human_idle", s=int(human_idle_required)),
             idle_ok,
-            "nieznane" if human_idle < 0 else f"ostatni ruch {fmt_duration(human_idle)} temu",
+            t("check.human_idle.unknown") if human_idle < 0
+            else t("check.human_idle.detail", d=fmt_duration(human_idle)),
         ))
 
     if guard_patterns:
         checks.append((
-            "Brak procesow-straznikow",
+            t("check.no_guards"),
             not guard_hits,
-            ", ".join(guard_hits) if guard_hits else "czysto",
+            ", ".join(guard_hits) if guard_hits else t("check.no_guards.ok"),
         ))
 
     all_ok = all(passed for _, passed, _ in checks)
     new_stable = stable_polls + 1 if all_ok else 0
     checks.append((
-        f"Potwierdzone {required_polls}x z rzedu",
+        t("check.confirmed", n=required_polls),
         new_stable >= required_polls,
         f"{new_stable}/{required_polls}",
     ))
@@ -461,7 +476,7 @@ def evaluate(
     )
 
 
-def classify_turn(event: dict) -> tuple[str, str]:
+def classify_turn(event: dict) -> tuple[str, str, dict]:
     """Ostatni znaczacy rekord transkryptu -> (stan tury, opis po ludzku).
 
     Semantyka zweryfikowana na zywych transkryptach tej maszyny:
@@ -472,26 +487,26 @@ def classify_turn(event: dict) -> tuple[str, str]:
       isCompactSummary                   -> wlasnie zjechala kompaktacja, praca wraca
     """
     if event.get("isCompactSummary"):
-        return TURN_OPEN, "kompaktowanie kontekstu"
+        return TURN_OPEN, "turn.compacting", {}
 
     kind = event.get("type")
     message = event.get("message") or {}
     if kind == "assistant":
         stop = message.get("stop_reason")
         if stop == "tool_use":
-            return TURN_OPEN, "narzedzie w toku"
+            return TURN_OPEN, "turn.tool_in_flight", {}
         if stop in ("end_turn", "stop_sequence"):
-            return TURN_CLOSED, "czeka na Ciebie"
+            return TURN_CLOSED, "turn.waiting_for_you", {}
         if stop == "max_tokens":
-            return TURN_OPEN, "urwane na limicie tokenow"
-        return TURN_OPEN, f"odpowiedz w toku ({stop})"
+            return TURN_OPEN, "turn.cut_at_token_limit", {}
+        return TURN_OPEN, "turn.reply_in_progress", {"stop": stop}
     if kind == "user":
         content = message.get("content")
         is_tool_result = isinstance(content, list) and any(
             isinstance(b, dict) and b.get("type") == "tool_result" for b in content)
-        return TURN_OPEN, ("model przetwarza wynik narzedzia" if is_tool_result
-                           else "model liczy odpowiedz / kompaktuje")
-    return TURN_UNKNOWN, f"nieznany rekord ({kind})"
+        return TURN_OPEN, ("turn.processing_tool_result" if is_tool_result
+                           else "turn.model_thinking"), {}
+    return TURN_UNKNOWN, "turn.unknown_record", {"kind": kind}
 
 
 def _read_tail(path: Path, max_bytes: int) -> tuple[list[bytes], bool]:
@@ -509,7 +524,7 @@ def _read_tail(path: Path, max_bytes: int) -> tuple[list[bytes], bool]:
 
 
 def turn_state(path: Path | None, max_bytes: int = 256 * 1024,
-               limit_bytes: int = 16 * 1024 * 1024) -> tuple[str, str]:
+               limit_bytes: int = 16 * 1024 * 1024) -> tuple[str, str, dict]:
     """Czyta ogon transkryptu i mowi, czy tura jest domknieta.
 
     To jest odpowiedz na kompaktowanie i czekanie na limit API: mtime pliku wtedy
@@ -523,14 +538,14 @@ def turn_state(path: Path | None, max_bytes: int = 256 * 1024,
     pracy zostalaby uznana za nieznana.
     """
     if path is None:
-        return TURN_UNKNOWN, "brak transkryptu"
+        return TURN_UNKNOWN, "turn.no_transcript", {}
 
     window = max_bytes
     while True:
         try:
             lines, truncated = _read_tail(path, window)
         except OSError as exc:
-            return TURN_UNKNOWN, f"nie moge odczytac ({exc.strerror or exc})"
+            return TURN_UNKNOWN, "turn.cannot_read", {"error": exc.strerror or str(exc)}
 
         for raw in reversed(lines):
             raw = raw.strip()
@@ -547,7 +562,7 @@ def turn_state(path: Path | None, max_bytes: int = 256 * 1024,
             return classify_turn(event)
 
         if not truncated or window >= limit_bytes:
-            return TURN_UNKNOWN, "brak rekordu rozmowy w transkrypcie"
+            return TURN_UNKNOWN, "turn.no_conversation_record", {}
         window *= 4  # rekord nie zmiescil sie w oknie - siegamy glebiej
 
 
@@ -676,10 +691,10 @@ def describe_event(event: dict) -> tuple[str, str, str]:
     kind = str(event.get("type") or "?")
     message = event.get("message") or {}
     content = message.get("content")
-    who = {"assistant": "Claude", "user": "Ty/narzedzie",
-           "system": "system"}.get(kind) or kind
+    who = {"assistant": t("preview.who.assistant"), "user": t("preview.who.user"),
+           "system": t("preview.who.system")}.get(kind) or kind
     if event.get("isSidechain"):
-        who = f"subagent/{who}"
+        who = t("preview.who.subagent", who=who)
 
     parts: list[str] = []
     if isinstance(content, str):
@@ -692,7 +707,7 @@ def describe_event(event: dict) -> tuple[str, str, str]:
             if btype == "text":
                 parts.append(block.get("text", ""))
             elif btype == "thinking":
-                parts.append("[myslenie]")
+                parts.append(t("preview.thinking"))
             elif btype == "tool_use":
                 cmd = ""
                 inp = block.get("input") or {}
@@ -705,7 +720,7 @@ def describe_event(event: dict) -> tuple[str, str, str]:
                 body = block.get("content")
                 if isinstance(body, list):
                     body = " ".join(b.get("text", "") for b in body if isinstance(b, dict))
-                parts.append(f"<- wynik: {body or ''!s}")
+                parts.append(t("preview.result", body=body or ""))
     elif event.get("summary"):
         parts.append(str(event["summary"]))
 

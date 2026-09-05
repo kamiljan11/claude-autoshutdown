@@ -28,6 +28,7 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 import winprobe
+from i18n import AUTO, LANGUAGES, current_language, set_language, t
 from monitor import (
     Session,
     SessionScanner,
@@ -88,6 +89,7 @@ DEFAULT_CONFIG: dict = {
     "allow_zero_sessions": False,
     "arm_on_start": False,
     "force_close_apps": True,
+    "language": "auto",  # jezyk systemu, jesli go mamy; inaczej angielski
     "guard_patterns": [],
 }
 
@@ -114,6 +116,7 @@ def load_config() -> dict:
     # ma zostac zdjety. Tym, czego nigdy nie dziedziczymy, jest UZBROJENIE:
     # program zawsze startuje rozbrojony (ClaudeAutoShutdown.armed = False).
     cfg["dry_run"] = bool(cfg.get("dry_run", True))
+    set_language(str(cfg.get("language") or AUTO))
     return cfg
 
 
@@ -257,15 +260,15 @@ class CountdownWindow(tk.Toplevel):
         self.remaining = seconds
         self.cancelled = False
 
-        self.title("Claude AutoShutdown - odliczanie")
+        self.title(t("countdown.title"))
         self.configure(bg=BG)
         self.attributes("-topmost", True)
         self.protocol("WM_DELETE_WINDOW",
-                      lambda: self.cancel("zamkniecie okna odliczania"))
-        self.bind("<Escape>", lambda _e: self.cancel("klawisz Esc"))
+                      lambda: self.cancel(t("countdown.reason.close")))
+        self.bind("<Escape>", lambda _e: self.cancel(t("countdown.reason.esc")))
         self.geometry(f"{app.px(600)}x{app.px(330)}")
 
-        tk.Label(self, text="Wszystkie sesje skonczyly prace",
+        tk.Label(self, text=t("countdown.heading"),
                  bg=BG, fg=FG, font=("Segoe UI", 16, "bold")).pack(pady=(24, 4))
         tk.Label(self, text=action_label, bg=BG, fg=WARN_COLOR,
                  font=("Segoe UI", 12)).pack()
@@ -274,20 +277,20 @@ class CountdownWindow(tk.Toplevel):
                                 font=("Segoe UI", 72, "bold"))
         self.counter.pack(pady=6)
 
-        self.note = tk.Label(self, text="Ruch mysza lub nowa aktywnosc sesji tez przerwie akcje",
+        self.note = tk.Label(self, text=t("countdown.note"),
                              bg=BG, fg=FG_DIM, font=("Segoe UI", 9))
         self.note.pack()
 
         row = tk.Frame(self, bg=BG)
         row.pack(pady=16)
         self.cancel_button = tk.Button(
-            row, text="ANULUJ  (Esc)", command=lambda: self.cancel("przycisk ANULUJ"),
+            row, text=t("countdown.cancel"), command=lambda: self.cancel(t("countdown.reason.button")),
             bg=OK_COLOR, fg="#0b0f14", font=("Segoe UI", 13, "bold"), width=16,
             relief="flat", cursor="hand2")
         self.cancel_button.pack(side="left", padx=8)
         # "Wykonaj teraz" celowo nie przyjmuje focusu klawiatury - przypadkowa spacja
         # ma anulowac, nigdy przyspieszyc wylaczenie.
-        tk.Button(row, text="Wykonaj teraz", command=self.fire, bg=BG_ROW, fg=FG,
+        tk.Button(row, text=t("countdown.now"), command=self.fire, bg=BG_ROW, fg=FG,
                   font=("Segoe UI", 10), width=14, relief="flat", takefocus=0,
                   cursor="hand2").pack(side="left", padx=8)
 
@@ -309,7 +312,8 @@ class CountdownWindow(tk.Toplevel):
         self.remaining -= 1
         self.after(1000, self._tick)
 
-    def cancel(self, reason: str = "zrodlo nieznane") -> None:
+    def cancel(self, reason: str = "") -> None:
+        reason = reason or t("countdown.reason.unknown")
         if self.cancelled:
             return
         self.cancelled = True
@@ -356,28 +360,24 @@ class ClaudeAutoShutdown:
         self._build_body()
         # Wpis MUSI opisywac rzeczywisty stan - staly napis "tryb prob" klamalby
         # dokladnie wtedy, gdy program potrafi naprawde wylaczyc komputer.
-        tryb = "tryb prob" if self.cfg["dry_run"] else "TRYB BOJOWY"
-        akcja = winprobe.POWER_ACTIONS[self.cfg["action"]].label
-        self._append_log(log_line(
-            f"Start programu (ROZBROJONY, {tryb}, akcja: {akcja}, "
-            f"cisza {self.cfg['quiet_seconds']}s, bezczynnosc "
-            f"{self.cfg['human_idle_required']}s)"))
+        self._append_log(log_line(t(
+            "log.start",
+            mode=t("log.mode_dry") if self.cfg["dry_run"] else t("log.mode_live"),
+            action=winprobe.POWER_ACTIONS[self.cfg["action"]].label,
+            quiet=self.cfg["quiet_seconds"], idle=self.cfg["human_idle_required"])))
 
         if AUTOARM:
             self.armed = True
-            self._append_log(log_line(
-                "AUTOARM: uzbrojono bez potwierdzenia (CLAUDE_AUTOSHUTDOWN_AUTOARM=1) "
-                "- tryb testu koncowego"))
+            self._append_log(log_line(t("log.autoarm_env")))
             self._render_header()
         elif self.cfg.get("arm_on_start"):
             # Swiadome oslabienie bezpiecznika nr 1: program uzbraja sie sam po
             # starcie, zeby po restarcie komputera nie trzeba bylo nic klikac.
             # Reszta bramek (cisza, tury, bezczynnosc, odliczanie, STOP) zostaje.
             self.armed = True
-            self._append_log(log_line(
-                f"Uzbrojono automatycznie przy starcie (arm_on_start=true) - "
-                f"akcja: {winprobe.POWER_ACTIONS[self.cfg['action']].label}, "
-                f"tryb prob: {self.cfg['dry_run']}"))
+            self._append_log(log_line(t(
+                "log.autoarm_cfg", action=winprobe.POWER_ACTIONS[self.cfg["action"]].label,
+                dry=self.cfg["dry_run"])))
             self._render_header()
 
         self.monitor = MonitorThread(self)
@@ -413,21 +413,25 @@ class ClaudeAutoShutdown:
 
         right = tk.Frame(head, bg=BG_PANEL)
         right.pack(side="right", padx=18)
-        self.arm_button = tk.Button(right, text="UZBROJ", command=self.toggle_arm,
+        self.arm_button = tk.Button(right, text=t("btn.arm"), command=self.toggle_arm,
                                     bg=OK_COLOR, fg="#0b0f14", width=13, relief="flat",
                                     font=("Segoe UI", 12, "bold"), cursor="hand2")
         self.arm_button.pack(side="right", padx=(10, 0), pady=18)
         self.counts_label = tk.Label(right, text="", bg=BG_PANEL, fg=FG,
                                      font=("Segoe UI", 10))
         self.counts_label.pack(side="right", padx=12)
+        # Przelacznik jezyka: pokazuje TEN DRUGI jezyk (klik = przejdz na niego).
+        tk.Button(right, text=t("btn.lang"), command=self.toggle_language, bg=BG_ROW,
+                  fg=FG, width=4, relief="flat", font=("Segoe UI", 9, "bold"),
+                  cursor="hand2").pack(side="right", padx=(0, 6))
 
         left = tk.Frame(head, bg=BG_PANEL)
         left.pack(side="left", padx=18, pady=12, fill="both", expand=True)
 
-        self.state_label = tk.Label(left, text="● ROZBROJONY", bg=BG_PANEL, fg=FG_DIM,
+        self.state_label = tk.Label(left, text=t("header.disarmed"), bg=BG_PANEL, fg=FG_DIM,
                                     font=("Segoe UI", 15, "bold"))
         self.state_label.pack(anchor="w")
-        self.verdict_label = tk.Label(left, text="Uruchamiam skaner...", bg=BG_PANEL,
+        self.verdict_label = tk.Label(left, text=t("header.starting"), bg=BG_PANEL,
                                       fg=FG_DIM, font=("Segoe UI", 10))
         self.verdict_label.pack(anchor="w", pady=(2, 0), fill="x")
 
@@ -444,8 +448,8 @@ class ClaudeAutoShutdown:
         self.content = tk.Frame(body, bg=BG)
         self.content.pack(side="left", fill="both", expand=True)
 
-        for key, label in (("monitor", "Monitor"), ("preview", "Podglad"),
-                           ("settings", "Ustawienia"), ("log", "Log")):
+        for key, label in (("monitor", t("nav.monitor")), ("preview", t("nav.preview")),
+                           ("settings", t("nav.settings")), ("log", t("nav.log"))):
             btn = tk.Button(nav, text=label, command=lambda k=key: self.show_page(k),
                             bg=BG_PANEL, fg=FG_DIM, relief="flat", anchor="w",
                             font=("Segoe UI", 11), padx=20, pady=12, cursor="hand2",
@@ -455,7 +459,7 @@ class ClaudeAutoShutdown:
             page = tk.Frame(self.content, bg=BG)
             self.pages[key] = page
 
-        tk.Label(nav, text="STOP = plik w katalogu\nprogramu blokuje akcje",
+        tk.Label(nav, text=t("nav.stop_hint"),
                  bg=BG_PANEL, fg=FG_DIM, font=("Segoe UI", 8), justify="left",
                  anchor="w").pack(side="bottom", fill="x", padx=16, pady=14)
 
@@ -474,7 +478,7 @@ class ClaudeAutoShutdown:
 
     # --- strona: monitor ---------------------------------------------------
     def _build_monitor_page(self, page: tk.Frame) -> None:
-        tk.Label(page, text="Zywe sesje Claude", bg=BG, fg=FG,
+        tk.Label(page, text=t("monitor.title"), bg=BG, fg=FG,
                  font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=18, pady=(16, 6))
 
         columns = ("state", "name", "where", "why", "silence", "cpu", "subs", "pid")
@@ -482,9 +486,10 @@ class ClaudeAutoShutdown:
         wrap.pack(fill="x", padx=18)
         self.tree = ttk.Treeview(wrap, columns=columns, show="headings", height=9)
         headings = {
-            "state": ("Stan", 95), "name": ("Sesja", 125), "where": ("Katalog / typ", 180),
-            "why": ("Dlaczego", 250), "silence": ("Cisza", 80), "cpu": ("CPU", 60),
-            "subs": ("Subagenci", 90), "pid": ("PID", 60),
+            "state": (t("col.state"), 95), "name": (t("col.name"), 125),
+            "where": (t("col.where"), 180), "why": (t("col.why"), 250),
+            "silence": (t("col.silence"), 80), "cpu": (t("col.cpu"), 60),
+            "subs": (t("col.subs"), 90), "pid": (t("col.pid"), 60),
         }
         for col, (title, width) in headings.items():
             self.tree.heading(col, text=title)
@@ -501,7 +506,7 @@ class ClaudeAutoShutdown:
         self.tree.bind("<<TreeviewSelect>>", self._on_tree_select)
         self.tree.bind("<Double-1>", lambda _e: self.show_page("preview"))
 
-        tk.Label(page, text="Warunki wylaczenia (wszystkie musza byc zielone)", bg=BG,
+        tk.Label(page, text=t("monitor.conditions"), bg=BG,
                  fg=FG, font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=18,
                                                             pady=(18, 6))
         self.checks_frame = tk.Frame(page, bg=BG_PANEL)
@@ -517,7 +522,7 @@ class ClaudeAutoShutdown:
     def _build_preview_page(self, page: tk.Frame) -> None:
         top = tk.Frame(page, bg=BG)
         top.pack(fill="x", padx=18, pady=(16, 8))
-        tk.Label(top, text="Sesja:", bg=BG, fg=FG_DIM,
+        tk.Label(top, text=t("preview.session"), bg=BG, fg=FG_DIM,
                  font=("Segoe UI", 10)).pack(side="left")
         self.preview_combo = ttk.Combobox(top, state="readonly", width=52)
         self.preview_combo.pack(side="left", padx=8)
@@ -569,17 +574,16 @@ class ClaudeAutoShutdown:
             tk.Label(wrap, text=hint, bg=BG, fg=FG_DIM,
                      font=("Segoe UI", 9)).grid(row=row, column=2, sticky="w")
 
-        add_row(0, "quiet_seconds", "Cisza sesji [s]",
-                "ile sekund bez zapisu do transkryptu = sesja skonczyla")
-        add_row(1, "poll_seconds", "Co ile sprawdzac [s]", "czestotliwosc skanu")
-        add_row(2, "required_polls", "Potwierdzen z rzedu",
-                "tyle cykli pod rzad musi byc czysto")
-        add_row(3, "countdown_seconds", "Odliczanie [s]", "czas na anulowanie")
-        add_row(4, "human_idle_required", "Bezczynnosc uzytkownika [s]",
-                "ile nie ruszasz myszy zanim wolno wylaczyc")
+        add_row(0, "quiet_seconds", t("settings.quiet"), t("settings.quiet.hint"))
+        add_row(1, "poll_seconds", t("settings.poll"), t("settings.poll.hint"))
+        add_row(2, "required_polls", t("settings.polls"), t("settings.polls.hint"))
+        add_row(3, "countdown_seconds", t("settings.countdown"),
+                t("settings.countdown.hint"))
+        add_row(4, "human_idle_required", t("settings.human_idle"),
+                t("settings.human_idle.hint"))
 
         row = 5
-        tk.Label(wrap, text="Akcja", bg=BG, fg=FG,
+        tk.Label(wrap, text=t("settings.action"), bg=BG, fg=FG,
                  font=("Segoe UI", 10)).grid(row=row, column=0, sticky="w", pady=6)
         self.action_var = tk.StringVar(value=self.cfg["action"])
         action_box = ttk.Combobox(wrap, textvariable=self.action_var, state="readonly",
@@ -597,13 +601,11 @@ class ClaudeAutoShutdown:
         self.armstart_var = tk.BooleanVar(value=bool(self.cfg.get("arm_on_start")))
         self.force_var = tk.BooleanVar(value=bool(self.cfg.get("force_close_apps", True)))
         for var, text, hint in (
-            (self.dry_var, "Tryb prob (nic nie wylacza, tylko loguje)", "zdejmij gdy ufasz"),
-            (self.human_var, "Wymagaj bezczynnosci uzytkownika", "chroni gdy siedzisz przy kompie"),
-            (self.zero_var, "Pozwol dzialac gdy zero sesji od startu", "domyslnie wylaczone"),
-            (self.armstart_var, "Uzbrajaj sie sam przy starcie",
-             "zero klikania po restarcie - reszta bramek dziala normalnie"),
-            (self.force_var, "Wymus zamkniecie aplikacji (/f)",
-             "bez tego Windows moze pokazac ekran blokujacy i czekac na klikniecie"),
+            (self.dry_var, t("settings.dry_run"), t("settings.dry_run.hint")),
+            (self.human_var, t("settings.require_idle"), t("settings.require_idle.hint")),
+            (self.zero_var, t("settings.zero_sessions"), t("settings.zero_sessions.hint")),
+            (self.armstart_var, t("settings.arm_on_start"), t("settings.arm_on_start.hint")),
+            (self.force_var, t("settings.force"), t("settings.force.hint")),
         ):
             tk.Checkbutton(wrap, text=text, variable=var, bg=BG, fg=FG, selectcolor=BG_ROW,
                            activebackground=BG, activeforeground=FG, relief="flat",
@@ -613,19 +615,19 @@ class ClaudeAutoShutdown:
                      font=("Segoe UI", 9)).grid(row=row, column=2, sticky="w")
             row += 1
 
-        tk.Label(wrap, text="Procesy-straznicy (po przecinku)", bg=BG, fg=FG,
+        tk.Label(wrap, text=t("settings.guards"), bg=BG, fg=FG,
                  font=("Segoe UI", 10)).grid(row=row, column=0, sticky="w", pady=6)
         self.guard_var = tk.StringVar(value=", ".join(self.cfg.get("guard_patterns") or []))
         tk.Entry(wrap, textvariable=self.guard_var, width=40, bg=BG_ROW, fg=FG,
                  relief="flat", insertbackground=FG).grid(row=row, column=1, columnspan=2,
                                                           sticky="w", padx=10)
         row += 1
-        tk.Label(wrap, text="np. ffmpeg, handbrake - dopoki zyja, nie wylaczamy",
+        tk.Label(wrap, text=t("settings.guards.hint"),
                  bg=BG, fg=FG_DIM, font=("Segoe UI", 9)).grid(row=row, column=1,
                                                               columnspan=2, sticky="w",
                                                               padx=10)
         row += 1
-        tk.Button(wrap, text="Zapisz ustawienia", command=self.save_settings, bg=ACCENT,
+        tk.Button(wrap, text=t("settings.save"), command=self.save_settings, bg=ACCENT,
                   fg="#ffffff", relief="flat", font=("Segoe UI", 10, "bold"), padx=18,
                   pady=6, cursor="hand2").grid(row=row, column=0, columnspan=2,
                                                sticky="w", pady=18)
@@ -637,16 +639,17 @@ class ClaudeAutoShutdown:
         row += 1
         can_shutdown, why = winprobe.shutdown_capability()
         states = winprobe.available_sleep_states()
-        tk.Label(wrap, text="Uprawnienia", bg=BG, fg=FG,
+        tk.Label(wrap, text=t("settings.privileges"), bg=BG, fg=FG,
                  font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w",
                                                      pady=(10, 2))
         row += 1
-        tk.Label(wrap, text=("OK  " if can_shutdown else "BRAK  ") + why, bg=BG,
+        tk.Label(wrap, text=(t("settings.priv_ok") if can_shutdown
+                             else t("settings.priv_missing")) + why, bg=BG,
                  fg=OK_COLOR if can_shutdown else BAD_COLOR,
                  font=("Segoe UI", 9)).grid(row=row, column=0, columnspan=3, sticky="w")
         if states:
             row += 1
-            tk.Label(wrap, text=f"Stany zasilania wspierane przez system: {states}",
+            tk.Label(wrap, text=t("settings.power_states", states=states),
                      bg=BG, fg=FG_DIM, font=("Segoe UI", 9)).grid(
                 row=row, column=0, columnspan=3, sticky="w")
 
@@ -660,7 +663,7 @@ class ClaudeAutoShutdown:
                         "countdown_seconds", "human_idle_required"):
                 new_cfg[key] = max(1, int(float(self.vars[key].get())))
         except ValueError:
-            messagebox.showerror("Blad", "Liczby, prosze. Sprawdz pola.")
+            messagebox.showerror(t("settings.err_numbers"), t("settings.err_numbers.body"))
             return
 
         new_cfg["action"] = self.action_box.get().split(" - ")[0]
@@ -675,13 +678,14 @@ class ClaudeAutoShutdown:
         try:
             save_config(self.cfg)
         except OSError as exc:
-            messagebox.showerror("Blad zapisu", str(exc))
+            messagebox.showerror(t("settings.err_save"), str(exc))
             return
         self.monitor.reset_stability()
         self.monitor.wake()
-        self.settings_status.config(text="zapisane")
+        self.settings_status.config(text=t("settings.saved"))
         self.root.after(2500, lambda: self.settings_status.config(text=""))
-        self._append_log(log_line(f"Ustawienia zapisane: {json.dumps(self.cfg, ensure_ascii=False)}"))
+        self._append_log(log_line(t("log.settings_saved",
+                                    cfg=json.dumps(self.cfg, ensure_ascii=False))))
 
     # --- strona: log -------------------------------------------------------
     def _build_log_page(self, page: tk.Frame) -> None:
@@ -701,16 +705,41 @@ class ClaudeAutoShutdown:
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
 
+    # --- jezyk -------------------------------------------------------------
+    def toggle_language(self) -> None:
+        """Przelacza jezyk i przebudowuje interfejs w miejscu, bez restartu.
+
+        Stan (sesje, werdykt, uzbrojenie, watek monitora) zyje w obiekcie, nie
+        w widgetach, wiec zburzenie i odbudowanie okna nic nie gubi.
+        """
+        codes = list(LANGUAGES)
+        new_code = codes[(codes.index(current_language()) + 1) % len(codes)]
+        set_language(new_code)
+        new_cfg = dict(self.cfg)
+        new_cfg["language"] = new_code
+        self.cfg = new_cfg
+        try:
+            save_config(self.cfg)
+        except OSError:
+            pass  # jezyk i tak dziala do konca sesji; brak zapisu nie blokuje UI
+        for child in list(self.root.winfo_children()):
+            if child is not self.countdown:
+                child.destroy()
+        self._build_header()
+        self._build_body()
+        self._render_all()
+        self._append_log(log_line(t("log.language", lang=LANGUAGES[new_code])))
+
     # --- uzbrajanie --------------------------------------------------------
     def toggle_arm(self) -> None:
         if self.armed:
             self.armed = False
             self.monitor.reset_stability()
-            self._append_log(log_line("ROZBROJONY (recznie)"))
+            self._append_log(log_line(t("log.disarmed")))
             # Rozbrojenie MUSI zatrzymac trwajace odliczanie - inaczej przycisk
             # klamie: napis zmienia sie na ROZBROJONY, a komputer i tak gasnie.
             if self.countdown is not None:
-                self.countdown.cancel("rozbrojenie w trakcie odliczania")
+                self.countdown.cancel(t("countdown.reason.disarm"))
             self._render_header()
             return
 
@@ -720,36 +749,28 @@ class ClaudeAutoShutdown:
         if action.needs_privilege:
             can, why = winprobe.shutdown_capability()
             if not can:
-                self._append_log(log_line(f"Odmowa uzbrojenia - brak uprawnien: {why}"))
-                messagebox.showerror(
-                    "Nie moge uzbroic",
-                    f"Akcja '{label}' wymaga przywileju wylaczania, a system go "
-                    f"odmawia:\n\n{why}\n\nWybierz inna akcje w Ustawieniach.")
+                self._append_log(log_line(t("log.arm_refused", why=why)))
+                messagebox.showerror(t("arm.refused_title"),
+                                     t("arm.refused_body", label=label, why=why))
                 return
-        mode = "TRYB PROB - nic sie nie stanie" if self.cfg["dry_run"] else "NAPRAWDE WYKONA AKCJE"
+        mode = t("arm.mode_dry") if self.cfg["dry_run"] else t("arm.mode_live")
         summary = (
-            f"Akcja: {label}\n"
-            f"Tryb: {mode}\n\n"
-            f"Warunki:\n"
-            f"  - kazda sesja cicho przez {self.cfg['quiet_seconds']} s\n"
-            f"  - zero pracujacych subagentow\n"
-            f"  - kazda tura domknieta (end_turn), zadna nieznana\n"
-            f"  - {self.cfg['required_polls']} potwierdzenia z rzedu\n"
-            + (f"  - brak ruchu myszy przez {self.cfg['human_idle_required']} s\n"
+            t("arm.summary", label=label, mode=mode, quiet=self.cfg["quiet_seconds"],
+              polls=self.cfg["required_polls"])
+            + (t("arm.summary_idle", idle=self.cfg["human_idle_required"])
                if self.cfg["require_human_idle"] else "")
-            + f"  - odliczanie {self.cfg['countdown_seconds']} s z przyciskiem ANULUJ\n\n"
-            + ("Aplikacje zostana zamkniete WYMUSZONE (/f): Windows nie zapyta o zgode,\n"
-               "ale niezapisana praca w innych programach przepadnie.\n\n"
+            + t("arm.summary_countdown", countdown=self.cfg["countdown_seconds"])
+            + (t("arm.summary_force")
                if action_name == "shutdown" and self.cfg.get("force_close_apps", True)
                else "")
-            + "Uzbroic?"
+            + t("arm.summary_question")
         )
-        if not messagebox.askyesno("Potwierdz uzbrojenie", summary, icon="warning"):
+        if not messagebox.askyesno(t("arm.confirm_title"), summary, icon="warning"):
             return
         self.armed = True
         self.monitor.reset_stability()
         self.monitor.wake()
-        self._append_log(log_line(f"UZBROJONY - akcja={action_name}, dry_run={self.cfg['dry_run']}"))
+        self._append_log(log_line(t("log.armed", action=action_name, dry=self.cfg["dry_run"])))
         self._render_header()
 
     # --- petla GUI ---------------------------------------------------------
@@ -768,18 +789,19 @@ class ClaudeAutoShutdown:
                     self.verdict = verdict
                     snapshot_at = self.last_snapshot = time.time()
                     if scan_error:
-                        self._append_log(log_line(f"Uwaga skanera: {scan_error}"))
+                        self._append_log(log_line(t("log.scanner_warning", error=scan_error)))
                     self._render_all()
                     self._log_blocker_change(verdict)
                     self._maybe_trigger(verdict, snapshot_at)
                 elif kind == "error":
-                    self._append_log(log_line(f"Blad watku monitora: {payload.splitlines()[-1]}"))
+                    self._append_log(log_line(t("log.monitor_error",
+                                                error=payload.splitlines()[-1])))
         except queue.Empty:
             pass
         except Exception:  # noqa: BLE001 - petla pilnujaca nie moze umrzec po cichu
             try:
-                self._append_log(log_line(
-                    f"Blad petli GUI: {traceback.format_exc().splitlines()[-1]}"))
+                self._append_log(log_line(t("log.gui_error",
+                                            error=traceback.format_exc().splitlines()[-1])))
             except tk.TclError:
                 pass
         finally:
@@ -796,14 +818,12 @@ class ClaudeAutoShutdown:
         stale_after = max(30.0, 3 * float(self.cfg["poll_seconds"]))
         age = time.time() - self.last_snapshot
         if age > stale_after and self.monitor.is_alive():
-            self.state_label.config(text="● MONITOR MILCZY", fg=BAD_COLOR)
-            self.verdict_label.config(
-                text=f"Brak swiezych danych od {fmt_duration(age)} - nie ufaj temu widokowi",
-                fg=BAD_COLOR)
-        elif not self.monitor.is_alive():
-            self.state_label.config(text="● MONITOR PADL", fg=BAD_COLOR)
-            self.verdict_label.config(text="Watek skanera nie zyje - uruchom program ponownie",
+            self.state_label.config(text=t("header.monitor_silent"), fg=BAD_COLOR)
+            self.verdict_label.config(text=t("header.stale", d=fmt_duration(age)),
                                       fg=BAD_COLOR)
+        elif not self.monitor.is_alive():
+            self.state_label.config(text=t("header.monitor_dead"), fg=BAD_COLOR)
+            self.verdict_label.config(text=t("header.dead"), fg=BAD_COLOR)
         self.root.after(5000, self._check_monitor_alive)
 
     def _log_blocker_change(self, verdict: Verdict) -> None:
@@ -821,17 +841,19 @@ class ClaudeAutoShutdown:
             return
         self.last_blockers = current
         if current:
-            self._append_log(log_line("Czekam, bo: " + " | ".join(b[:120] for b in current)))
+            self._append_log(log_line(t("log.waiting",
+                                        blockers=" | ".join(b[:120] for b in current))))
         else:
-            self._append_log(log_line("Wszystkie warunki zielone"))
+            self._append_log(log_line(t("log.all_green")))
 
     def _maybe_trigger(self, verdict: Verdict, snapshot_at: float = 0.0) -> None:
         if self.countdown is not None:
             # Odliczanie trwa - jesli cokolwiek przestalo byc czyste, przerywamy.
+            confirm_label = t("check.confirmed", n=verdict.required_polls)
             if not all(passed for name, passed, _ in verdict.checks
-                       if not name.startswith("Potwierdzone")):
+                       if name != confirm_label):
                 blockers = "; ".join(verdict.blockers)
-                self.countdown.cancel(f"warunki przestaly byc spelnione ({blockers})")
+                self.countdown.cancel(t("countdown.reason.conditions", blockers=blockers))
             return
         if verdict.ok and snapshot_at and snapshot_at <= self.last_cancel:
             # Migawka powstala PRZED anulowaniem - gdyby ja uwzglednic, ANULUJ
@@ -840,17 +862,17 @@ class ClaudeAutoShutdown:
         if verdict.ok and self.armed:
             label = winprobe.POWER_ACTIONS[self.cfg["action"]].label
             if self.cfg["dry_run"]:
-                label += "  [TRYB PROB]"
-            self._append_log(log_line(
-                f"Warunki spelnione {verdict.stable_polls}/{verdict.required_polls} "
-                f"- start odliczania {self.cfg['countdown_seconds']} s"))
+                label += f"  [{t('log.mode_dry').upper()}]"
+            self._append_log(log_line(t(
+                "log.countdown_start", a=verdict.stable_polls, b=verdict.required_polls,
+                s=self.cfg["countdown_seconds"])))
             self.countdown = CountdownWindow(self, int(self.cfg["countdown_seconds"]), label)
 
     def on_countdown_cancelled(self, reason: str) -> None:
         self.countdown = None
         self.last_cancel = time.time()
         self.monitor.reset_stability()
-        self._append_log(log_line(f"Odliczanie ANULOWANE: {reason}"))
+        self._append_log(log_line(t("log.countdown_cancelled", reason=reason)))
         self._render_header()
 
     def execute_action(self) -> None:
@@ -858,10 +880,10 @@ class ClaudeAutoShutdown:
         # Ostatnia bramka tuz przed akcja. Miedzy startem odliczania a ta chwila
         # uzytkownik mogl rozbroic program albo postawic plik STOP.
         if not self.armed:
-            self._append_log(log_line("Akcja pominieta - program jest rozbrojony"))
+            self._append_log(log_line(t("log.skipped_disarmed")))
             return
         if STOP_FILE.exists():
-            self._append_log(log_line("Akcja pominieta - pojawil sie plik STOP"))
+            self._append_log(log_line(t("log.skipped_stop")))
             self.armed = False
             self._render_header()
             return
@@ -870,42 +892,33 @@ class ClaudeAutoShutdown:
         snapshot_age = time.time() - self.last_snapshot
         max_age = max(30.0, 3 * float(self.cfg["poll_seconds"]))
         if snapshot_age > max_age or not self.monitor.is_alive():
-            self._append_log(log_line(
-                f"Akcja WSTRZYMANA - dane skanera nieswieze ({fmt_duration(snapshot_age)}), "
-                f"watek zyje: {self.monitor.is_alive()}"))
+            self._append_log(log_line(t("log.withheld_stale", d=fmt_duration(snapshot_age),
+                                        alive=self.monitor.is_alive())))
             self.armed = False
             self._render_header()
-            messagebox.showwarning(
-                "Akcja wstrzymana",
-                "Skaner przestal dostarczac dane, wiec nie wiem, czy sesje nadal "
-                "pracuja.\n\nProgram sie rozbroil zamiast zgadywac.")
+            messagebox.showwarning(t("action.stale_title"), t("action.stale_body"))
             return
         action = self.cfg["action"]
         if self.cfg["dry_run"]:
-            self._append_log(log_line(
-                f"TRYB PROB: tutaj poszloby '{winprobe.POWER_ACTIONS[action].label}'. "
-                "Odznacz 'Tryb prob' w Ustawieniach, zeby dzialalo naprawde."))
+            label = winprobe.POWER_ACTIONS[action].label
+            self._append_log(log_line(t("log.dry_run", label=label)))
             self.armed = False
             self.monitor.reset_stability()
             self._render_header()
-            messagebox.showinfo("Tryb prob",
-                                "Warunki spelnione - w trybie bojowym komputer zostalby "
-                                f"teraz obsluzony akcja: {winprobe.POWER_ACTIONS[action].label}.")
+            messagebox.showinfo(t("dry.title"), t("dry.body", label=label))
             return
         ok, detail = winprobe.power_action(
             action, force=bool(self.cfg.get("force_close_apps", True)))
         if ok:
-            self._append_log(log_line(f"AKCJA WYKONANA: {detail}"))
+            self._append_log(log_line(t("log.action_done", detail=detail)))
             return
         # Cicha porazka byla by najgorsza: uzytkownik mysli ze komputer zgasl,
         # a rano zastaje go wlaczonego bez sladu dlaczego.
-        self._append_log(log_line(f"AKCJA NIEUDANA: {detail}"))
+        self._append_log(log_line(t("log.action_failed", detail=detail)))
         self.armed = False
         self.monitor.reset_stability()
         self._render_header()
-        messagebox.showerror(
-            "Akcja nie powiodla sie",
-            f"{detail}\n\nProgram sie rozbroil. Szczegoly w zakladce Log.")
+        messagebox.showerror(t("action.failed_title"), t("action.failed_body", detail=detail))
 
     # --- rendering ---------------------------------------------------------
     def _render_all(self) -> None:
@@ -916,30 +929,31 @@ class ClaudeAutoShutdown:
 
     def _render_header(self) -> None:
         if self.armed:
-            self.state_label.config(text="● UZBROJONY", fg=OK_COLOR)
-            self.arm_button.config(text="ROZBRÓJ", bg=BAD_COLOR, fg="#ffffff")
+            self.state_label.config(text=t("header.armed"), fg=OK_COLOR)
+            self.arm_button.config(text=t("btn.disarm"), bg=BAD_COLOR, fg="#ffffff")
         else:
-            self.state_label.config(text="● ROZBROJONY", fg=FG_DIM)
-            self.arm_button.config(text="UZBROJ", bg=OK_COLOR, fg="#0b0f14")
+            self.state_label.config(text=t("header.disarmed"), fg=FG_DIM)
+            self.arm_button.config(text=t("btn.arm"), bg=OK_COLOR, fg="#0b0f14")
 
         working = sum(1 for s in self.sessions if s.working)
-        mode = " · tryb prob" if self.cfg["dry_run"] else " · TRYB BOJOWY"
+        mode = t("header.mode_dry") if self.cfg["dry_run"] else t("header.mode_live")
         self.counts_label.config(
-            text=f"sesje: {len(self.sessions)}  ·  pracuja: {working}{mode}")
+            text=t("header.counts", n=len(self.sessions), w=working, mode=mode))
 
         if self.verdict is None:
             return
         if self.verdict.ok:
-            text, color = "Warunki spelnione - odliczanie", OK_COLOR
+            text, color = t("header.conditions_met"), OK_COLOR
         else:
+            armed_label = t("check.armed") + ":"
             blockers = [b for b in self.verdict.blockers
-                        if not b.startswith("Uzbrojony")] or self.verdict.blockers
+                        if not b.startswith(armed_label)] or self.verdict.blockers
             first = blockers[0] if blockers else "?"
             if len(first) > 96:
                 first = first[:93] + "..."
-            text = "Czekam - " + first
+            text = t("header.waiting", reason=first)
             if len(blockers) > 1:
-                text += f"  (+{len(blockers) - 1} innych)"
+                text += t("header.more", n=len(blockers) - 1)
             color = WARN_COLOR if self.armed else FG_DIM
         self.verdict_label.config(text=text, fg=color)
 
@@ -947,7 +961,8 @@ class ClaudeAutoShutdown:
         selected = self.tree.selection()
         self.tree.delete(*self.tree.get_children())
         for session in self.sessions:
-            subs = f"{session.active_subagents} aktywnych" if session.active_subagents else "-"
+            subs = (t("monitor.subs_active", n=session.active_subagents)
+                    if session.active_subagents else "-")
             self.tree.insert(
                 "", "end", iid=session.session_id,
                 values=(session.state, session.name,
@@ -967,7 +982,7 @@ class ClaudeAutoShutdown:
         for name, passed, detail in self.verdict.checks:
             row = tk.Frame(self.checks_frame, bg=BG_PANEL)
             row.pack(fill="x", padx=14, pady=3)
-            tk.Label(row, text="OK" if passed else "NIE", width=4,
+            tk.Label(row, text=t("monitor.ok") if passed else t("monitor.no"), width=4,
                      bg=BG_PANEL, fg=OK_COLOR if passed else BAD_COLOR,
                      font=("Segoe UI", 9, "bold")).pack(side="left")
             tk.Label(row, text=name, bg=BG_PANEL, fg=FG, width=34, anchor="w",
@@ -996,7 +1011,7 @@ class ClaudeAutoShutdown:
                         if s.session_id == self.selected_session_id), None)
         if session is None or session.transcript is None:
             if force:
-                self._set_preview_text("Brak transkryptu dla tej sesji.")
+                self._set_preview_text(t("preview.no_transcript"))
             return
 
         events = tail_events(session.transcript, count=45)
@@ -1013,8 +1028,8 @@ class ClaudeAutoShutdown:
 
         age = time.time() - session.last_activity
         self.preview_status.config(
-            text=f"{session.state} · ostatni zapis {fmt_duration(age)} temu · "
-                 f"{session.transcript.name}")
+            text=t("preview.status", state=session.state, d=fmt_duration(age),
+                   file=session.transcript.name))
 
     def _set_preview_text(self, text: str) -> None:
         self.preview_text.configure(state="normal")
@@ -1024,10 +1039,9 @@ class ClaudeAutoShutdown:
 
     # --- zamkniecie --------------------------------------------------------
     def on_close(self) -> None:
-        if self.armed and not messagebox.askyesno(
-                "Zamknac?", "Program jest UZBROJONY. Zamkniecie anuluje pilnowanie. Zamknac?"):
+        if self.armed and not messagebox.askyesno(t("close.title"), t("close.body")):
             return
-        self._append_log(log_line("Zamkniecie programu"))
+        self._append_log(log_line(t("log.closing")))
         self.closing = True
         self.monitor.stop()
         LOCK_FILE.unlink(missing_ok=True)
@@ -1042,10 +1056,7 @@ def main() -> None:
     if other is not None:
         root = tk.Tk()
         root.withdraw()
-        messagebox.showwarning(
-            "Program juz dziala",
-            f"Claude AutoShutdown dziala juz w procesie {other}.\n\n"
-            "Dwie instancje moglyby wykonac akcje dwa razy, wiec ta sie zamyka.")
+        messagebox.showwarning(t("instance.title"), t("instance.body", pid=other))
         root.destroy()
         return
     claim_instance_lock()

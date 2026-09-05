@@ -8,23 +8,35 @@ watches Claude Code sessions and triggers shutdown, hibernate, sleep or lock whe
 idle. Built for unattended overnight agent runs.
 
 [![Python](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)](#requirements)
-[![Tests](https://img.shields.io/badge/tests-105%20passing-brightgreen)](#tests)
+[![Platform](https://img.shields.io/badge/platform-Windows%20only-lightgrey)](#requirements)
+[![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen)](#tests)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-none-brightgreen)](#requirements)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 ![Claude AutoShutdown monitoring live Claude Code sessions](docs/monitor.png)
 
-> The UI is currently in Polish. The screenshot above reads: *Live Claude sessions* — state
-> (WORKING / IDLE), session, directory, **why**, silence, CPU, subagents, PID — and below,
-> *Shutdown conditions (all must be green)*. English localisation is not done yet; PRs welcome.
+UI in **English and Polish**. It follows your Windows display language by default and has a
+one-click switch in the header (`PL` / `EN`). Adding another language is one dictionary in
+[`i18n.py`](i18n.py).
 
 ---
 
-## The problem
+## Why this exists
 
-You start a long agent run, go to sleep, and want the PC off when it's done. Every naive
-approach gets this wrong in a way that either **kills work in progress** or **never fires at all**:
+Claude Code has no built-in "turn the computer off when you're done". So you set up a long task —
+an audit, a refactor, a batch of agents in a loop — and then you have two bad options:
+
+- **Leave the PC on all night.** The agents finish at 2 AM; the machine hums until you wake up,
+  doing nothing. The same when you go out: tasks finish in an hour, the computer idles for six.
+- **Use a timer or Windows' own idle sleep.** Both fire on a clock, not on *work*. A timer cuts an
+  agent off mid-edit. Windows' idle sleep counts *your* mouse and keyboard, not the agent's
+  activity — so people disable it entirely, and we're back to option one.
+
+This tool replaces "off at 3 AM" with **"off when the work is actually done"** — and it is
+deliberately paranoid about what "done" means, because getting it wrong destroys an hour of
+agent work at the worst possible moment.
+
+## Why the obvious signals don't work
 
 | Naive signal | Why it fails |
 |---|---|
@@ -33,8 +45,7 @@ approach gets this wrong in a way that either **kills work in progress** or **ne
 | "The process exited" | Sessions stay resident between turns; the process living tells you nothing |
 | "Window title / focus" | Says nothing about background subagents |
 
-Getting it wrong at 3 AM means an agent loses an hour of work mid-edit. This tool is built
-around one rule: **not knowing is never permission to shut down.**
+One rule underneath everything: **not knowing is never permission to shut down.**
 
 ---
 
@@ -48,6 +59,10 @@ It reads the same on-disk state Claude Code writes, rather than guessing from sy
 | `~/.claude/projects/<slug>/<sessionId>.jsonl` | transcript — `mtime` advances on every write |
 | `.../<sessionId>/subagents/**/*.jsonl` | subagents, **including Workflow fan-outs in nested folders** |
 | last transcript record | **turn state** — the single most important signal |
+
+Every scan (default: every 10 s) re-reads the registry, so a session started a minute ago is
+picked up on the next cycle. A session file whose process is gone is discarded. There is no
+"list of known sessions" that could go stale.
 
 ### Turn state beats file silence
 
@@ -85,11 +100,16 @@ The distributions overlap, so CPU carries no information. It stays as a column i
 to look at, not to decide with. At the original 3 % threshold every idle session falsely reported
 "working" and the machine would never have shut down.
 
-### Dead sessions
+### Dead sessions and the process list
 
 A session file survives its process. Stale entries are rejected in two steps: the PID must be
 alive **and** the process start time must match `procStart` from the file (1 s tolerance). That
-defeats Windows PID recycling.
+defeats Windows PID recycling — the same check Task Manager can't do for you.
+
+The registry is the source of truth, but it is **cross-checked against the OS process list**: a
+live Claude Code process (`claude-code\...\claude.exe`) with no registry entry blocks shutdown.
+The desktop app's helper processes (renderer, GPU, crashpad — also named `claude.exe`) are
+filtered out by path, so they don't cause false alarms.
 
 ---
 
@@ -109,8 +129,7 @@ Shutting down a machine is irreversible enough to deserve paranoia.
 8. **Single instance** — a second copy detects the first (PID + process start time) and exits
    instead of running the action twice. A lock file left by a crash blocks nothing.
 9. **Scanner failure blocks.** "I can't see anything" does not mean "nothing is running".
-10. **Cross-check against the OS process list** — a live Claude Code process with no registry entry
-    blocks shutdown. Desktop-app helper processes (renderer, GPU, crashpad) are filtered out by path.
+10. **Cross-check against the OS process list** (see above).
 11. **The last session disappearing still requires silence** — closing your last Claude window
     doesn't kill the machine 30 seconds later.
 12. **Disarming aborts a running countdown**, and the executor re-checks armed state, the `STOP`
@@ -127,10 +146,9 @@ Shutting down a machine is irreversible enough to deserve paranoia.
 The program must turn the machine off with nobody at the keyboard, so no step may wait for a click.
 
 - **No UAC prompt.** Shutting down your own machine needs only `SeShutdownPrivilege`, which a
-  normal account has — not administrator rights. Verified: `shutdown /s /t 600` returned **exit 0**
-  from a non-elevated account (then immediately aborted). The app self-checks this privilege on
-  startup and **refuses to arm** if the chosen action isn't available, rather than promising
-  something it can't deliver.
+  normal account has — not administrator rights. Verified: `shutdown /s /t 600 /f` returned
+  **exit 0** from a non-elevated account (then immediately aborted). The app self-checks this
+  privilege and **refuses to arm** if the chosen action isn't available.
 - **No blocking screen.** Without `/f`, Windows can display "This app is preventing shutdown" and
   wait. The shutdown action uses `shutdown /s /t 0 /f`. The cost: unsaved work in other programs is
   lost. Switchable off in Settings.
@@ -140,20 +158,28 @@ The program must turn the machine off with nobody at the keyboard, so no step ma
 
 ---
 
-## Requirements
+## Requirements — and will it work on your machine?
 
-- **Windows** (uses Win32 APIs through `ctypes`: process times, `GetLastInputInfo`, token privileges)
-- **Python 3.14** — developed and tested on 3.14.2 / 3.14.3
-- **No third-party runtime dependencies.** Standard library only: `ctypes`, `tkinter`, `json`,
-  `subprocess`, `pathlib`, `threading`, `queue`. `pytest` is needed only to run the test suite.
-- Claude Code writing its usual state under `~/.claude` (override with `CLAUDE_CONFIG_DIR`)
+| | |
+|---|---|
+| **OS** | **Windows only.** Uses Win32 APIs via `ctypes` (process times, `GetLastInputInfo`, token privileges), `shutdown.exe`, `tasklist`, and a `.vbs` launcher. It will not run on macOS or Linux. |
+| **Python** | **3.14** (developed on 3.14.2 / 3.14.3, CI runs 3.14). Uses `datetime.UTC` (3.11+) and `X \| Y` unions; earlier 3.x versions are untested. Tkinter ships with the python.org installer. |
+| **Dependencies** | None at runtime — standard library only. `pytest` and `ruff` only for the test suite. |
+| **Claude Code** | Reads state from `~/.claude` (override with `CLAUDE_CONFIG_DIR`). Developed against Claude Code **2.1.24x–2.1.26x**; the session-registry and transcript formats are internal and undocumented, so a future Claude Code release could change them. If that happens the tool fails **closed** — unknown formats block shutdown, they never permit it. |
+| **Session types** | Verified with sessions launched from the Claude desktop app (Cowork, entrypoint `claude-desktop`). The npm-installed CLI also runs as a native `claude.exe` under a `claude-code\` path, so the same detection applies — but terminal-launched sessions have **not** been observed end-to-end on the development machine. |
+
+Fresh-machine proof: the CI workflow installs and runs everything on a clean `windows-latest`
+runner with nothing but Python — lint, 116 unit tests and the 13-stage end-to-end run.
+
+There is no installer or `.exe` build; this is a clone-and-run Python project aimed at people
+who already run Claude Code.
 
 ## Install
 
 ```bash
 git clone https://github.com/kamiljan11/claude-autoshutdown.git
 cd claude-autoshutdown
-python -m pytest -q          # optional: 105 tests
+python -m pytest -q          # optional: 116 tests
 ```
 
 Start it with **`Claude AutoShutdown.vbs`** (no console window), or
@@ -169,8 +195,8 @@ $s.Arguments  = '"C:\path\to\claude-autoshutdown\Claude AutoShutdown.vbs"'
 $s.Save()
 ```
 
-It starts **disarmed and in dry-run mode**. To make it actually shut down, untick "Tryb prób"
-(dry run) in Settings and click UZBRÓJ (arm).
+It starts **disarmed and in dry-run mode**. To make it actually shut down, untick "Dry run" in
+Settings and click ARM. To skip the click after every reboot, tick "Arm automatically at start".
 
 ## Configuration
 
@@ -187,6 +213,7 @@ It starts **disarmed and in dry-run mode**. To make it actually shut down, untic
 | `force_close_apps` | `true` | append `/f` so Windows shows no blocking screen |
 | `arm_on_start` | `false` | arm automatically at launch (no clicking after a reboot) |
 | `dry_run` | `true` | **turn off to actually shut down** |
+| `language` | `auto` | `auto` = Windows display language if supported, else English; or `en` / `pl` |
 | `guard_patterns` | `[]` | substring / glob / regex process names that block shutdown |
 
 The state directory (config, log, `STOP` file) can be moved with `CLAUDE_AUTOSHUTDOWN_HOME`.
@@ -194,7 +221,7 @@ The state directory (config, log, `STOP` file) can be moved with `CLAUDE_AUTOSHU
 ## Tests
 
 ```bash
-python -m pytest -q      # 105 unit tests
+python -m pytest -q      # 116 unit tests
 python ultimate_test.py  # 13-stage end-to-end run
 ```
 
@@ -218,10 +245,12 @@ the machine down mid-run.
 
 - A session waiting for **your** answer to a permission prompt has an open turn, so it blocks
   shutdown. Intentional — but a pending approval keeps the machine on.
+- A turn interrupted with `Esc` mid-tool-call stays OPEN in the transcript. The monitor shows how
+  long it has been blocking, but does not guess that it was abandoned.
 - The program knows nothing about work **outside** Claude Code: a running `git push`, a render, an
   upload. Use `guard_patterns` for those.
 - `sleep` on a machine with hibernation enabled usually hibernates — that's Windows behaviour.
-- UI strings are Polish. The logic and this document are language-independent.
+- Windows only; no installer.
 
 ## Keywords
 

@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from i18n import t
 from monitor import (
     TURN_CLOSED,
     TURN_OPEN,
@@ -44,7 +45,7 @@ def make_session(**overrides) -> Session:
         "entrypoint": "claude-desktop", "kind": "interactive", "started_at": 0.0,
         "transcript": None, "last_activity": time.time() - 1000, "silence": 1000.0,
         "cpu_percent": 0.0, "active_subagents": 0, "working": False,
-        "turn": TURN_CLOSED, "turn_reason": "czeka na Ciebie",
+        "turn": TURN_CLOSED, "turn_reason": "turn.waiting_for_you",
     }
     defaults.update(overrides)
     return Session(**defaults)
@@ -61,20 +62,20 @@ def test_wszystko_czyste_wylacza():
 
 def test_pracujaca_sesja_blokuje_i_zeruje_licznik():
     busy = make_session(working=True, silence=5.0, turn=TURN_OPEN,
-                        turn_reason="narzedzie w toku")
+                        turn_reason="turn.tool_in_flight")
     verdict = evaluate([busy], **BASE_ARGS)
     assert not verdict.ok
     assert verdict.stable_polls == 0, "licznik potwierdzen musi wrocic do zera"
-    assert any("narzedzie w toku" in b for b in verdict.blockers)
+    assert any(t("turn.tool_in_flight") in b for b in verdict.blockers)
 
 
 def test_otwarta_tura_blokuje_mimo_dlugiej_ciszy():
     """Kompaktowanie / czekanie na limit API: plik stoi, ale praca trwa."""
     compacting = make_session(working=True, silence=3600.0, turn=TURN_OPEN,
-                              turn_reason="kompaktowanie kontekstu")
+                              turn_reason="turn.compacting")
     verdict = evaluate([compacting], **BASE_ARGS)
     assert not verdict.ok
-    assert any("kompaktowanie" in b for b in verdict.blockers)
+    assert any(t("turn.compacting") in b for b in verdict.blockers)
 
 
 def test_krotka_cisza_blokuje_nawet_gdy_tura_domknieta():
@@ -133,7 +134,7 @@ def test_potrzeba_wymaganej_liczby_potwierdzen():
 def test_jedna_pracujaca_wsrod_wielu_blokuje():
     sessions = [make_session(session_id=str(i)) for i in range(4)]
     sessions[2] = make_session(session_id="2", working=True, silence=2.0,
-                               turn=TURN_OPEN, turn_reason="narzedzie w toku")
+                               turn=TURN_OPEN, turn_reason="turn.tool_in_flight")
     verdict = evaluate(sessions, **BASE_ARGS)
     assert not verdict.ok
 
@@ -152,14 +153,15 @@ def test_jedna_pracujaca_wsrod_wielu_blokuje():
     ({"type": "cos-nowego"}, TURN_UNKNOWN),
 ])
 def test_classify_turn(event, expected):
-    state, reason = classify_turn(event)
+    state, reason, _params = classify_turn(event)
     assert state == expected
-    assert reason
+    assert reason.startswith("turn."), "powod musi byc kluczem i18n"
+    assert t(reason) != reason, "klucz musi miec tlumaczenie"
 
 
 def test_classify_turn_kompaktowanie_ma_wlasny_opis():
-    _, reason = classify_turn({"type": "user", "isCompactSummary": True})
-    assert "kompakt" in reason.lower()
+    _, reason, _p = classify_turn({"type": "user", "isCompactSummary": True})
+    assert reason == "turn.compacting"
 
 
 # --------------------------------------------------------------------------- #
@@ -177,7 +179,7 @@ def test_turn_state_pomija_rekordy_techniczne(tmp_path: Path):
         {"type": "bridge-session"},
         {"type": "custom-title"},
     ])
-    state, _ = turn_state(path)
+    state, _, _ = turn_state(path)
     assert state == TURN_CLOSED, "szum po ostatniej turze nie moze zmienic werdyktu"
 
 
@@ -188,9 +190,9 @@ def test_turn_state_wykrywa_otwarte_narzedzie(tmp_path: Path):
         {"type": "user", "message": {"content": "zrob cos"}},
         {"type": "assistant", "message": {"stop_reason": "tool_use"}},
     ])
-    state, reason = turn_state(path)
+    state, reason, _ = turn_state(path)
     assert state == TURN_OPEN
-    assert "narzedzie" in reason
+    assert reason == "turn.tool_in_flight"
 
 
 def test_turn_state_brak_pliku():
@@ -241,7 +243,7 @@ def test_fmt_duration(seconds, expected):
 
 def test_session_why_tlumaczy_stan():
     assert make_session(working=True, turn=TURN_OPEN,
-                        turn_reason="kompaktowanie kontekstu").why == "kompaktowanie kontekstu"
+                        turn_reason="turn.compacting").why == t("turn.compacting")
     assert "subagent" in make_session(working=True, turn=TURN_UNKNOWN,
                                       active_subagents=2).why
 
@@ -382,7 +384,7 @@ def test_rekord_wiekszy_niz_okno_nie_daje_unknown(tmp_path: Path):
     write_transcript(path, [{"type": "assistant",
                              "message": {"stop_reason": "end_turn"}}, huge])
     assert path.stat().st_size > 256 * 1024
-    state, reason = turn_state(path, max_bytes=64 * 1024)
+    state, reason, _ = turn_state(path, max_bytes=64 * 1024)
     assert state == TURN_OPEN, f"dostalem {state}: {reason}"
 
 
@@ -398,7 +400,7 @@ def test_adaptacja_ma_limit(tmp_path: Path):
     """Bez gornego limitu program wciagnalby caly 200 MB plik do pamieci."""
     path = tmp_path / "smieci.jsonl"
     path.write_bytes(b"x" * 300_000 + b"\n")
-    state, _ = turn_state(path, max_bytes=1024, limit_bytes=8192)
+    state, _, _ = turn_state(path, max_bytes=1024, limit_bytes=8192)
     assert state == TURN_UNKNOWN
 
 
@@ -423,11 +425,11 @@ def test_nowe_typy_rekordow_nie_kasuja_otwartej_tury(tmp_path: Path, noise_type:
 
 def test_evaluate_blokuje_gdy_tura_nieznana():
     unknown = make_session(working=True, turn=TURN_UNKNOWN,
-                           turn_reason="nie moge odczytac (Permission denied)")
+                           turn_reason="turn.cannot_read",
+                           turn_params={"error": "Permission denied"})
     verdict = evaluate([unknown], **BASE_ARGS)
     assert not verdict.ok
-    assert any("nieznan" in b.lower() or "odczytac" in b.lower()
-               for b in verdict.blockers), verdict.blockers
+    assert any("Permission denied" in b for b in verdict.blockers), verdict.blockers
 
 
 @pytest.mark.parametrize(("pattern", "name", "expected"), [
@@ -463,9 +465,10 @@ def test_zniknieta_ostatnia_sesja_wymaga_ciszy():
 
 
 def test_dlugo_otwarta_tura_jest_widoczna():
-    s = make_session(working=True, turn=TURN_OPEN, turn_reason="narzedzie w toku",
+    s = make_session(working=True, turn=TURN_OPEN, turn_reason="turn.tool_in_flight",
                      silence=7200.0)
-    assert "blokuje od" in s.why
+    assert s.why == t("why.blocking_since", reason=t("turn.tool_in_flight"),
+                      duration=fmt_duration(7200.0))
 
 
 def test_proces_sesji_bez_wpisu_w_rejestrze_blokuje():
@@ -542,3 +545,50 @@ def test_uszkodzony_plik_sesji_TO_awaria(tmp_path: Path):
     scanner = SessionScanner(root=tmp_path)
     scanner.scan(quiet_seconds=300.0)
     assert scanner.last_error, "uszkodzony plik musi ustawic blad skanera"
+
+
+def test_kazdy_jezyk_ma_komplet_kluczy():
+    """Brak klucza = na ekranie pojawia sie surowy identyfikator zamiast tekstu."""
+    from i18n import missing_keys
+    assert missing_keys() == {"pl": []}, missing_keys()
+
+
+def test_nieznany_jezyk_wraca_do_angielskiego():
+    from i18n import current_language, set_language
+    assert set_language("xx") == "en"
+    assert current_language() == "en"
+
+
+def test_przelaczenie_jezyka_zmienia_teksty_silnika():
+    from i18n import set_language
+    try:
+        set_language("pl")
+        assert make_session().state == "BEZCZYNNA"
+        set_language("en")
+        assert make_session().state == "IDLE"
+    finally:
+        set_language("en")
+
+
+def test_jezyk_systemu_jest_dwuliterowym_kodem():
+    from i18n import system_language
+    code = system_language()
+    assert len(code) == 2 and code.isalpha() and code.islower(), code
+
+
+@pytest.mark.parametrize(("setting", "expected"), [
+    ("pl", "pl"), ("en", "en"), ("xx", "en"), ("", None), (None, None), ("auto", None),
+])
+def test_resolve_language(setting, expected):
+    """None w oczekiwaniu = 'to, co da system, o ile obslugiwane, inaczej en'."""
+    from i18n import LANGUAGES, resolve_language, system_language
+    got = resolve_language(setting)
+    if expected is None:
+        sys_code = system_language()
+        expected = sys_code if sys_code in LANGUAGES else "en"
+    assert got == expected
+
+
+def test_nieznany_klucz_nie_jest_pustym_napisem():
+    """Literowka w kluczu ma byc WIDOCZNA (sam klucz), nie cichym pustym labelem."""
+    assert t("no.such.key") == "no.such.key"
