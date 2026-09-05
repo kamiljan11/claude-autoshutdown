@@ -10,5 +10,6 @@
   "allow_zero_sessions": false,
   "force_close_apps": true,
   "guard_patterns": [],
-  "arm_on_start": false
+  "arm_on_start": false,
+  "language": "auto"
 }

@@ -12,6 +12,7 @@ import sys
 import pytest
 
 import winprobe
+from i18n import t
 from winprobe import POWER_ACTIONS, power_action, probe_process, shutdown_capability
 
 WINDOWS_ONLY = pytest.mark.skipif(sys.platform != "win32", reason="tylko Windows")
@@ -66,13 +67,13 @@ def test_akcja_nothing_nic_nie_uruchamia(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", boom)
     ok, detail = power_action("nothing")
     assert ok
-    assert "nic nie wykonano" in detail
+    assert detail == t("power.nothing_done", label=t("action.nothing"))
 
 
 def test_nieznana_akcja_zwraca_blad():
     ok, detail = power_action("teleportacja")
     assert not ok
-    assert "nieznana akcja" in detail
+    assert detail == t("power.unknown_action", name="teleportacja")
 
 
 @WINDOWS_ONLY
@@ -86,8 +87,8 @@ def test_niezerowy_kod_wyjscia_to_porazka(monkeypatch):
                         lambda *_a, **_k: FakeCompleted(1, stdout="Usage: shutdown.exe"))
     ok, detail = power_action("shutdown")
     assert not ok
-    assert "NIEPOWODZENIE" in detail
-    assert "kod 1" in detail
+    assert "FAILED" in detail
+    assert "exit code 1" in detail
     assert "Usage" in detail
 
 
@@ -96,7 +97,7 @@ def test_zerowy_kod_wyjscia_to_sukces(monkeypatch):
     monkeypatch.setattr(subprocess, "run", lambda *_a, **_k: FakeCompleted(0))
     ok, detail = power_action("shutdown")
     assert ok
-    assert "wykonane" in detail
+    assert "executed" in detail
 
 
 @WINDOWS_ONLY
@@ -120,7 +121,7 @@ def test_blad_uruchomienia_procesu_to_porazka(monkeypatch):
     monkeypatch.setattr(subprocess, "run", explode)
     ok, detail = power_action("shutdown")
     assert not ok
-    assert "nie udalo sie uruchomic" in detail
+    assert "could not start" in detail
 
 
 @WINDOWS_ONLY

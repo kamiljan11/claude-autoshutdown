@@ -281,6 +281,7 @@ def gui_chain(env: FakeEnvironment) -> bool:
         "dry_run": False,                 # TRYB BOJOWY - akcja 'nothing' jest bezpieczna
         "require_human_idle": False,      # test jedzie bez czlowieka przy klawiaturze
         "human_idle_required": 600, "allow_zero_sessions": False, "guard_patterns": [],
+        "language": "en",           # grepy nizej sa po angielsku, niezaleznie od systemu
     }
     (home / "config.json").write_text(json.dumps(config), encoding="utf-8")
 
@@ -299,7 +300,7 @@ def gui_chain(env: FakeEnvironment) -> bool:
         say("  GUI wystartowalo, sesja PRACUJE - czekam 8 s, akcja NIE moze odpalic")
         time.sleep(8)
         gui_log = (home / "autoshutdown.log").read_text(encoding="utf-8")
-        if "odliczania" in gui_log or "AKCJA" in gui_log:
+        if "countdown" in gui_log or "ACTION" in gui_log:
             say("  OBLANY GUI zaczelo odliczac mimo pracujacej sesji")
             return False
         say("  ZDANY  brak odliczania przy pracujacej sesji")
@@ -310,7 +311,7 @@ def gui_chain(env: FakeEnvironment) -> bool:
         deadline = time.time() + 45
         while time.time() < deadline:
             gui_log = (home / "autoshutdown.log").read_text(encoding="utf-8")
-            if "AKCJA WYKONANA" in gui_log:
+            if "ACTION EXECUTED" in gui_log:
                 say("  ZDANY  pelny lancuch przeszedl do wykonania akcji")
                 for line in gui_log.splitlines():
                     say(f"          | {line}")

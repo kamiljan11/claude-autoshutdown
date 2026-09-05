@@ -4,6 +4,21 @@ Wyłącza komputer dopiero wtedy, gdy **wszystkie** sesje Claude Code / Cowork �
 razem z subagentami — faktycznie skończą pracę. Idziesz spać, agenci robią swoje,
 maszyna gaśnie sama.
 
+## Po co to istnieje
+
+Claude Code nie ma wbudowanego „wyłącz komputer, jak skończysz". Odpalasz długie zadanie —
+audyt, refaktor, pętlę agentów — i zostają dwie złe opcje: **zostawić komputer na całą noc**
+(agenci kończą o 2:00, maszyna buczy do rana; to samo, gdy wychodzisz z domu na kilka godzin),
+albo **timer / systemowe usypianie** — oba działają na zegar, nie na *pracę*. Timer utnie agenta
+w połowie edycji, a usypianie Windows liczy *Twoją* mysz, nie aktywność agenta, więc ludzie je
+wyłączają i wracamy do opcji pierwszej.
+
+Ten program zamienia „wyłącz o 3:00" na **„wyłącz, gdy robota jest naprawdę skończona"** — i jest
+celowo paranoiczny co do tego, co „skończona" znaczy.
+
+**Język:** interfejs po polsku i angielsku. Domyślnie bierze język Windows, przełącznik `PL`/`EN`
+w nagłówku. W `config.json`: `"language": "auto"` / `"en"` / `"pl"`.
+
 Uruchomienie: **`Claude AutoShutdown.vbs`** (bez okna konsoli).
 Diagnostyka: `Uruchom z konsola (diagnostyka).bat`.
 
@@ -183,7 +198,7 @@ włączony komputer bez śladu dlaczego.
 python -m pytest -q
 ```
 
-105 testów: logika decyzyjna, wykrywanie stanu tury, akcje zasilania, uprawnienia, blokada instancji i konfiguracja.
+116 testów: logika decyzyjna, wykrywanie stanu tury, akcje zasilania, uprawnienia, blokada instancji i konfiguracja.
 
 ```bash
 python ultimate_test.py

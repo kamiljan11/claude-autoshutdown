@@ -18,6 +18,8 @@ import sys
 from ctypes import wintypes
 from dataclasses import dataclass
 
+from i18n import t
+
 IS_WINDOWS = sys.platform == "win32"
 
 # --- stale WinAPI -----------------------------------------------------------
@@ -127,25 +129,29 @@ class PowerAction:
     obudzi, wiec czekanie na jego zakonczenie zawiesiloby program.
     """
     key: str
-    label: str
+    label_key: str
     args: list[str] | None
     wait_for_exit: bool = True
     needs_privilege: bool = True
+
+    @property
+    def label(self) -> str:
+        return t(self.label_key)
 
 
 # /f = zamknij aplikacje bez pytania. Bez tego Windows potrafi pokazac ekran
 # "Ta aplikacja uniemozliwia zamkniecie" i CZEKAC na klikniecie - czyli dokladnie
 # to, czego ma nie byc, gdy komputer ma zgasnac sam po nocy.
 POWER_ACTIONS: dict[str, PowerAction] = {
-    "shutdown": PowerAction("shutdown", "Wylacz komputer", ["shutdown", "/s", "/t", "0", "/f"]),
-    "hibernate": PowerAction("hibernate", "Hibernacja", ["shutdown", "/h"]),
-    "sleep": PowerAction("sleep", "Uspij (na maszynie z hibernacja zwykle hibernuje)",
+    "shutdown": PowerAction("shutdown", "action.shutdown", ["shutdown", "/s", "/t", "0", "/f"]),
+    "hibernate": PowerAction("hibernate", "action.hibernate", ["shutdown", "/h"]),
+    "sleep": PowerAction("sleep", "action.sleep",
                          ["rundll32.exe", "powrprof.dll,SetSuspendState", "0,1,0"],
                          wait_for_exit=False),
-    "lock": PowerAction("lock", "Zablokuj ekran",
+    "lock": PowerAction("lock", "action.lock",
                         ["rundll32.exe", "user32.dll,LockWorkStation"],
                         needs_privilege=False),
-    "nothing": PowerAction("nothing", "Nic nie rob (tylko log)", None,
+    "nothing": PowerAction("nothing", "action.nothing", None,
                            needs_privilege=False),
 }
 
@@ -165,11 +171,11 @@ def power_action(name: str, force: bool = True) -> tuple[bool, str]:
     """
     action = POWER_ACTIONS.get(name)
     if action is None:
-        return False, f"nieznana akcja: {name}"
+        return False, t("power.unknown_action", name=name)
     if action.args is None:
-        return True, f"{action.label} - nic nie wykonano"
+        return True, t("power.nothing_done", label=action.label)
     if not IS_WINDOWS:
-        return False, f"{action.label} - pominieto (nie-Windows)"
+        return False, t("power.skipped_non_windows", label=action.label)
 
     args = list(action.args)
     if name == "shutdown" and not force:
@@ -179,21 +185,21 @@ def power_action(name: str, force: bool = True) -> tuple[bool, str]:
     printable = " ".join(args)
     if not action.wait_for_exit:
         subprocess.Popen(args, creationflags=flags)
-        return True, f"{action.label} - komenda wyslana: {printable}"
+        return True, t("power.sent", label=action.label, cmd=printable)
     try:
         done = subprocess.run(args, capture_output=True, text=True, check=False,
                               timeout=ACTION_TIMEOUT_SECONDS, creationflags=flags)
     except subprocess.TimeoutExpired:
-        return True, f"{action.label} - komenda dziala dluzej niz zwykle: {printable}"
+        return True, t("power.slow", label=action.label, cmd=printable)
     except OSError as exc:
-        return False, f"{action.label} - nie udalo sie uruchomic: {exc}"
+        return False, t("power.cannot_start", label=action.label, error=exc)
 
     if done.returncode == 0:
-        return True, f"{action.label} - wykonane ({printable})"
+        return True, t("power.done", label=action.label, cmd=printable)
     detail = (done.stderr or done.stdout or "").strip().splitlines()
     reason = detail[0] if detail else "bez komunikatu"
-    return False, (f"{action.label} - NIEPOWODZENIE, kod {done.returncode}: "
-                   f"{reason} | komenda: {printable}")
+    return False, t("power.failed", label=action.label, code=done.returncode,
+                    reason=reason, cmd=printable)
 
 
 def cancel_pending_shutdown() -> None:
@@ -217,7 +223,7 @@ def shutdown_capability() -> tuple[bool, str]:
     wiec sprawdzenie mozna robic przy kazdym starcie programu.
     """
     if not IS_WINDOWS:
-        return False, "nie-Windows"
+        return False, t("priv.non_windows")
 
     class _LUID(ctypes.Structure):
         _fields_ = [("Low", wintypes.DWORD), ("High", wintypes.LONG)]
@@ -238,12 +244,12 @@ def shutdown_capability() -> tuple[bool, str]:
     if not advapi32.OpenProcessToken(
             _kernel32.GetCurrentProcess(),
             _TOKEN_ADJUST_PRIVILEGES | _TOKEN_QUERY, ctypes.byref(token)):
-        return False, "nie moge otworzyc tokenu procesu"
+        return False, t("priv.no_token")
     try:
         luid = _LUID()
         if not advapi32.LookupPrivilegeValueW(None, "SeShutdownPrivilege",
                                               ctypes.byref(luid)):
-            return False, "brak SeShutdownPrivilege w systemie"
+            return False, t("priv.missing")
 
         privileges = _TOKEN_PRIVILEGES(
             1, (_LUID_AND_ATTRIBUTES * 1)(
@@ -253,10 +259,10 @@ def shutdown_capability() -> tuple[bool, str]:
                                             0, None, None)
         err = ctypes.get_last_error()
         if ok and err == 0:
-            return True, "SeShutdownPrivilege wlaczony - wylaczanie dostepne"
+            return True, t("priv.enabled")
         if err == 1300:  # ERROR_NOT_ALL_ASSIGNED
-            return False, "konto nie ma przywileju wylaczania (ERROR_NOT_ALL_ASSIGNED)"
-        return False, f"AdjustTokenPrivileges blad {err}"
+            return False, t("priv.not_assigned")
+        return False, t("priv.adjust_error", code=err)
     finally:
         _kernel32.CloseHandle(token)
 
