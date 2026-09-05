@@ -151,7 +151,7 @@ The program must turn the machine off with nobody at the keyboard, so no step ma
 ## Install
 
 ```bash
-git clone https://github.com/OWNER/claude-autoshutdown.git
+git clone https://github.com/kamiljan11/claude-autoshutdown.git
 cd claude-autoshutdown
 python -m pytest -q          # optional: 105 tests
 ```
