@@ -1,6 +1,6 @@
 [project]
 name = "claude-autoshutdown"
-version = "1.0.0"
+version = "1.1.0"
 description = "Shut down Windows only after every Claude Code session and subagent has really finished"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -13,6 +13,8 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
+# PyInstaller only for producing the standalone .exe (python build_exe.py)
+build = ["pyinstaller>=6"]
 
 [tool.ruff]
 line-length = 100

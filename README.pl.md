@@ -19,8 +19,17 @@ celowo paranoiczny co do tego, co „skończona" znaczy.
 **Język:** interfejs po polsku i angielsku. Domyślnie bierze język Windows, przełącznik `PL`/`EN`
 w nagłówku. W `config.json`: `"language": "auto"` / `"en"` / `"pl"`.
 
-Uruchomienie: **`Claude AutoShutdown.vbs`** (bez okna konsoli).
+**Najprościej:** pobierz `ClaudeAutoShutdown.exe` z zakładki
+[Releases](https://github.com/kamiljan11/claude-autoshutdown/releases) i uruchom — Python
+niepotrzebny. Plik nie jest podpisany certyfikatem, więc SmartScreen ostrzeże przy pierwszym
+uruchomieniu („Więcej informacji" → „Uruchom mimo to"). Trzymaj go w osobnym folderze:
+obok siebie zapisuje `config.json`, log i plik `STOP`.
+
+**Ze źródeł:** **`Claude AutoShutdown.vbs`** (bez okna konsoli).
 Diagnostyka: `Uruchom z konsola (diagnostyka).bat`.
+
+**Język:** program startuje w języku Windows (polski albo angielski), przełącznik `PL`/`EN`
+w nagłówku. Pełna, aktualna dokumentacja jest po angielsku w [README.md](README.md).
 
 **Autostart:** skrót w `Startup` (`Claude AutoShutdown.lnk` → `wscript.exe` + launcher).
 Program wstaje po każdym zalogowaniu. Usunięcie skrótu wyłącza autostart.

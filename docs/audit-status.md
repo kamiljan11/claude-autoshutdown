@@ -40,7 +40,7 @@ exists (fixed as a side effect of an earlier change) · **dup** = same defect as
 | 29 | podglad-zamarza-po-zniknieciu-sesji | fixed | status shows "session has ended" |
 | 30 | render-tree-clobbers-wybor-podgladu | dup | = 28 |
 | 31 | tail-events-pusty-panel-przy-duzym-rekordzie | fixed | `tail_events` grows its window like `turn_state` |
-| 32 | podglad-slepy-na-subagentow | out of scope | subagent count is shown in Monitor; per-subagent transcript view deferred |
+| 32 | podglad-slepy-na-subagentow | fixed | Preview lists each subagent transcript under its session (newest first, max 20) |
 | 33 | brak-globalnego-lapacza-wyjatkow-cicha-smierc-pod-pythonw | fixed | `sys.excepthook` → `crash.log` + dialog |
 | 34 | load-config-nie-utf8-wysadza-start | fixed | `load_config` catches `ValueError` (covers `UnicodeDecodeError`) |
 | 35 | subprocess-text-true-strict-decode | fixed | `encoding="utf-8", errors="replace"` on tasklist / powercfg / shutdown |
@@ -67,4 +67,4 @@ exists (fixed as a side effect of an earlier change) · **dup** = same defect as
 | 56 | brak-testu-check-otwartej-tury-w-izolacji | fixed | `test_otwarta_tura_blokuje_niezaleznie_od_working` |
 | 57 | brak-testu-galezi-zero-sesji-po-widzianych | fixed | `test_sesje_zniknely_po_tym_jak_byly_wymaga_ciszy` |
 
-Totals: **43 fixed · 8 obsolete · 5 dup · 1 out of scope** (7 and 32 are the two deliberate omissions).
+Totals: **44 fixed · 8 obsolete · 5 dup · 1 out of scope** (7, WSL / second config dir, is the only deliberate omission).
