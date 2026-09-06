@@ -9,7 +9,7 @@ idle. Built for unattended overnight agent runs.
 
 [![Python](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20only-lightgrey)](#requirements)
-[![Tests](https://img.shields.io/badge/tests-116%20passing-brightgreen)](#tests)
+[![Tests](https://img.shields.io/badge/tests-155%20passing-brightgreen)](#tests)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-none-brightgreen)](#requirements)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -113,7 +113,7 @@ filtered out by path, so they don't cause false alarms.
 
 ---
 
-## Safety — fourteen independent gates
+## Safety — seventeen independent gates
 
 Shutting down a machine is irreversible enough to deserve paranoia.
 
@@ -124,7 +124,8 @@ Shutting down a machine is irreversible enough to deserve paranoia.
    aborts it automatically. The "Execute now" button refuses keyboard focus, so a stray space bar
    cancels — never accelerates.
 5. Requires the user to be idle (default 10 minutes without mouse or keyboard).
-6. A **`STOP` file** in the program directory blocks the action unconditionally.
+6. A **`STOP` file** in the program directory blocks the action unconditionally
+   (`STOP`, `STOP.txt` or `stop.txt` — Explorer likes to append the extension silently).
 7. **Guard processes** — while a process matching your pattern lives (e.g. `ffmpeg`), nothing happens.
 8. **Single instance** — a second copy detects the first (PID + process start time) and exits
    instead of running the action twice. A lock file left by a crash blocks nothing.
@@ -138,6 +139,20 @@ Shutting down a machine is irreversible enough to deserve paranoia.
     scanner stops delivering data the header switches to `MONITOR SILENT` / `MONITOR DEAD`.
 14. Every decision is logged, **including why it is still waiting** — the log records each change
     in the set of blockers, so "why is the machine still on this morning" has an answer.
+15. **A broken `config.json` cannot turn into "shut down".** Every value is validated on load:
+    `"false"` as a string stays false (Python's `bool("false")` is `True`), an unknown action
+    becomes `nothing` rather than `shutdown`, a countdown of 0 is raised to 5 s, and every
+    correction is written to the log. Saves are atomic, so a crash mid-write cannot leave
+    half a file that parses as defaults.
+16. **Failures are loud, not silent.** A crash under `pythonw` (no console) is written to
+    `crash.log` and shown in a dialog instead of vanishing; a failed process scan for guard
+    patterns blocks rather than reading as "clean"; a power command that hangs past its
+    timeout is reported as a failure, because `subprocess` kills it — reporting success there
+    was a lie.
+17. **Countdown hygiene.** After any cancellation there is a 60 s cooldown before a new
+    countdown may start, the action and mode are frozen when the countdown begins (changing
+    settings mid-countdown cancels it), and the bell rings at the start and in the last 5 s,
+    not every second.
 
 ---
 
@@ -169,7 +184,7 @@ The program must turn the machine off with nobody at the keyboard, so no step ma
 | **Session types** | Verified with sessions launched from the Claude desktop app (Cowork, entrypoint `claude-desktop`). The npm-installed CLI also runs as a native `claude.exe` under a `claude-code\` path, so the same detection applies — but terminal-launched sessions have **not** been observed end-to-end on the development machine. |
 
 Fresh-machine proof: the CI workflow installs and runs everything on a clean `windows-latest`
-runner with nothing but Python — lint, 116 unit tests and the 13-stage end-to-end run.
+runner with nothing but Python — lint, 155 unit tests and the 13-stage end-to-end run.
 
 There is no installer or `.exe` build; this is a clone-and-run Python project aimed at people
 who already run Claude Code.
@@ -179,7 +194,7 @@ who already run Claude Code.
 ```bash
 git clone https://github.com/kamiljan11/claude-autoshutdown.git
 cd claude-autoshutdown
-python -m pytest -q          # optional: 116 tests
+python -m pytest -q          # optional: 155 tests
 ```
 
 Start it with **`Claude AutoShutdown.vbs`** (no console window), or
@@ -221,7 +236,7 @@ The state directory (config, log, `STOP` file) can be moved with `CLAUDE_AUTOSHU
 ## Tests
 
 ```bash
-python -m pytest -q      # 116 unit tests
+python -m pytest -q      # 155 unit tests
 python ultimate_test.py  # 13-stage end-to-end run
 ```
 

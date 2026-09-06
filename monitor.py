@@ -315,6 +315,10 @@ class SessionScanner:
 
             started_at = meta.get("startedAt", 0) / 1000.0
             last_activity = max(transcript_mtime, sub_mtime, started_at)
+            if last_activity > now + 60:
+                # mtime z przyszlosci (skok zegara, zly czas pliku) dawalby cisze 0
+                # na zawsze - program nigdy by nie wylaczyl i nie mowilby dlaczego.
+                self.last_error = t("scan.future_mtime", name=meta.get("name") or session_id[:8])
             silence = max(0.0, now - last_activity) if last_activity else float("inf")
             cpu = self._cpu_percent(proc)
             turn, turn_reason, turn_params = self._turn_state_cached(
@@ -377,7 +381,7 @@ def evaluate(
     allow_zero_sessions: bool,
     saw_any_session: bool,
     guard_patterns: list[str],
-    guard_hits: list[str],
+    guard_hits: list[str] | None,
     stable_polls: int,
     required_polls: int,
     scan_error: str = "",
@@ -454,11 +458,16 @@ def evaluate(
         ))
 
     if guard_patterns:
-        checks.append((
-            t("check.no_guards"),
-            not guard_hits,
-            ", ".join(guard_hits) if guard_hits else t("check.no_guards.ok"),
-        ))
+        # guard_hits=None = tasklist zawiodl. Awaria skanu straznikow NIE moze
+        # wygladac jak "czysto" - wtedy zywy ffmpeg przepuszczalby wylaczenie.
+        if guard_hits is None:
+            checks.append((t("check.no_guards"), False, t("check.no_guards.scan_failed")))
+        else:
+            checks.append((
+                t("check.no_guards"),
+                not guard_hits,
+                ", ".join(guard_hits) if guard_hits else t("check.no_guards.ok"),
+            ))
 
     all_ok = all(passed for _, passed, _ in checks)
     new_stable = stable_polls + 1 if all_ok else 0
@@ -580,6 +589,7 @@ def claude_processes_without_registry(known_pids: set[int]) -> list[int]:
         out = subprocess.run(
             ["tasklist", "/fi", "IMAGENAME eq claude.exe", "/fo", "csv", "/nh"],
             capture_output=True, text=True, timeout=15, check=False,
+            encoding="utf-8", errors="replace",
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout
     except (OSError, subprocess.SubprocessError):
@@ -617,20 +627,30 @@ def fmt_duration(seconds: float) -> str:
     return f"{seconds // 3600}h {(seconds % 3600) // 60:02d}m"
 
 
-def matching_guard_processes(patterns: list[str]) -> list[str]:
-    """Nazwy procesow pasujacych do wzorcow uzytkownika (regex albo podciag)."""
-    if not patterns or sys.platform != "win32":
+def matching_guard_processes(patterns: list[str]) -> list[str] | None:
+    """Nazwy procesow pasujacych do wzorcow uzytkownika (regex albo podciag).
+
+    None = nie udalo sie odczytac listy procesow. Rozroznienie jest celowe:
+    pusta lista znaczy "sprawdzilem, czysto", None znaczy "nie wiem" - i to
+    drugie ma blokowac wylaczenie, nie przepuszczac.
+    """
+    if not patterns:
         return []
+    if sys.platform != "win32":
+        return None
     try:
         out = subprocess.run(
             ["tasklist", "/fo", "csv", "/nh"],
             capture_output=True, text=True, timeout=15, check=False,
+            encoding="utf-8", errors="replace",  # akcentowana nazwa procesu != crash
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout
     except (OSError, subprocess.SubprocessError):
-        return []
+        return None
     names = {line.split('","')[0].lstrip('"').lower()
              for line in out.splitlines() if line.strip()}
+    if not names:
+        return None  # tasklist odpowiedzial pustka - to awaria, nie "czysto"
     return sorted({name for name in names
                    if any(_pattern_matches(p, name) for p in patterns)})
 
@@ -659,30 +679,34 @@ def _pattern_matches(pattern: str, name: str) -> bool:
 # --------------------------------------------------------------------------- #
 # Podglad transkryptu
 # --------------------------------------------------------------------------- #
-def tail_events(path: Path, count: int = 40, max_bytes: int = 512 * 1024) -> list[dict]:
-    """Ostatnie zdarzenia z .jsonl bez wczytywania calego pliku (bywa >200 MB)."""
-    try:
-        with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            start = max(0, size - max_bytes)
-            fh.seek(start)
-            blob = fh.read()
-    except OSError:
-        return []
-    lines = blob.split(b"\n")
-    if start > 0 and lines:
-        lines = lines[1:]  # pierwsza linia jest ucieta
-    events: list[dict] = []
-    for raw in lines[-count * 3:]:
-        raw = raw.strip()
-        if not raw:
-            continue
+def tail_events(path: Path, count: int = 40, max_bytes: int = 512 * 1024,
+                limit_bytes: int = 16 * 1024 * 1024) -> list[dict]:
+    """Ostatnie zdarzenia ROZMOWY z .jsonl bez wczytywania calego pliku (bywa >200 MB).
+
+    Okno rosnie, gdy pojedynczy rekord jest wiekszy niz ogon (tak jak w turn_state),
+    a rekordy techniczne (attachment, frame-link...) sa pomijane - inaczej polowa
+    podgladu to "(attachment)", a rozmowa wypada poza 45 linii.
+    """
+    window = max_bytes
+    while True:
         try:
-            events.append(json.loads(raw.decode("utf-8", "replace")))
-        except json.JSONDecodeError:
-            continue
-    return events[-count:]
+            lines, truncated = _read_tail(path, window)
+        except OSError:
+            return []
+        events: list[dict] = []
+        for raw in lines:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                event = json.loads(raw.decode("utf-8", "replace"))
+            except json.JSONDecodeError:
+                continue
+            if event.get("type") in DECISIVE_RECORD_TYPES or event.get("isCompactSummary"):
+                events.append(event)
+        if events or not truncated or window >= limit_bytes:
+            return events[-count:]
+        window *= 4
 
 
 def describe_event(event: dict) -> tuple[str, str, str]:
