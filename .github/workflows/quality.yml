@@ -9,8 +9,8 @@ jobs:
   test:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.14"
       - name: Install test tooling
@@ -21,3 +21,37 @@ jobs:
         run: python -m pytest -q
       - name: End-to-end run on a synthetic environment
         run: python ultimate_test.py
+
+  build-exe:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.14"
+      - name: Install PyInstaller
+        run: python -m pip install --upgrade pip "pyinstaller>=6"
+      - name: Build standalone exe
+        run: python build_exe.py
+      - name: Smoke-run the exe (starts, writes its log, exits)
+        shell: pwsh
+        run: |
+          $home = Join-Path $env:RUNNER_TEMP "asd-home"
+          New-Item -ItemType Directory -Force $home | Out-Null
+          $env:CLAUDE_AUTOSHUTDOWN_HOME = $home
+          $env:CLAUDE_CONFIG_DIR = Join-Path $env:RUNNER_TEMP "fake-claude"
+          New-Item -ItemType Directory -Force (Join-Path $env:CLAUDE_CONFIG_DIR "sessions") | Out-Null
+          $p = Start-Process -FilePath dist\ClaudeAutoShutdown.exe -PassThru
+          Start-Sleep -Seconds 15
+          if ($p.HasExited) { throw "exe exited early with code $($p.ExitCode)" }
+          Stop-Process -Id $p.Id -Force
+          $log = Join-Path $home "autoshutdown.log"
+          if (-not (Test-Path $log)) { throw "exe did not write its log next to CLAUDE_AUTOSHUTDOWN_HOME" }
+          Get-Content $log
+          if (Test-Path (Join-Path $home "crash.log")) { Get-Content (Join-Path $home "crash.log"); throw "exe crashed" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: ClaudeAutoShutdown-exe
+          path: dist/ClaudeAutoShutdown.exe
+          if-no-files-found: error

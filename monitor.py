@@ -30,6 +30,7 @@ from winprobe import FILETIME_PER_SECOND, ProcInfo, probe_process
 # Tolerancja porownania czasu startu procesu (1 s) - chroni przed recyklingiem PID.
 PROC_START_TOLERANCE = FILETIME_PER_SECOND
 SUBAGENT_ACTIVE_WINDOW = 120.0  # subagent "swiezy" gdy pisal w ostatnich 2 min
+SUBAGENT_LIST_LIMIT = 20        # ile subagentow pokazujemy w Podgladzie per sesja
 # Ponizej tego odstepu pomiar %CPU jest smieciem (dzielenie przez mala liczbe daje
 # dziesiatki procent dla spiacego procesu -> sesja na zawsze "PRACUJE").
 MIN_CPU_SAMPLE_SECONDS = 1.0
@@ -76,6 +77,7 @@ class Session:
     turn: str = TURN_UNKNOWN  # CLOSED / OPEN / UNKNOWN
     turn_reason: str = ""     # KLUCZ i18n (t(turn_reason, **turn_params) daje tekst)
     turn_params: dict = field(default_factory=dict)
+    subagent_files: list[tuple[Path, float]] = field(default_factory=list)  # (sciezka, mtime)
 
     @property
     def turn_text(self) -> str:
@@ -193,28 +195,41 @@ class SessionScanner:
     def _subagent_activity(transcript: Path | None,
                            active_window: float = SUBAGENT_ACTIVE_WINDOW,
                            ) -> tuple[float, int]:
-        """Zwraca (najswiezszy mtime subagenta, liczba swiezych subagentow).
-
-        Szukamy REKURENCYJNIE: zwykli subagenci leza wprost w `subagents/`, ale
-        agenci uruchomieni przez Workflow siedza w `subagents/workflows/wf_*/`.
-        Plaskie przeszukanie ich nie widzialo - a to wlasnie one potrafia mielic
-        godzinami po tym, jak glowna sesja juz zamilkla.
-        """
-        if transcript is None:
-            return 0.0, 0
-        sub_dir = transcript.with_suffix("") / "subagents"
-        if not sub_dir.is_dir():
-            return 0.0, 0
-        newest, active, now = 0.0, 0, time.time()
-        for f in sub_dir.rglob("*.jsonl"):
-            try:
-                mtime = f.stat().st_mtime
-            except OSError:
-                continue
+        """Zwraca (najswiezszy mtime subagenta, liczba swiezych subagentow)."""
+        newest, active = 0.0, 0
+        now = time.time()
+        for _path, mtime in SessionScanner.subagent_transcripts(transcript):
             newest = max(newest, mtime)
             if now - mtime <= active_window:
                 active += 1
         return newest, active
+
+    @staticmethod
+    def subagent_transcripts(transcript: Path | None,
+                             limit: int = SUBAGENT_LIST_LIMIT) -> list[tuple[Path, float]]:
+        """Transkrypty subagentow sesji jako (sciezka, mtime), najswiezsze pierwsze.
+
+        Szukamy REKURENCYJNIE: zwykli subagenci leza wprost w `subagents/`, ale
+        agenci uruchomieni przez Workflow siedza w `subagents/workflows/wf_*/`.
+        Plaskie przeszukanie ich nie widzialo - a to wlasnie one potrafia mielic
+        godzinami po tym, jak glowna sesja juz zamilkla. Limit chroni Podglad
+        przed lista 150 agentow z jednego workflow.
+        """
+        if transcript is None:
+            return []
+        sub_dir = transcript.with_suffix("") / "subagents"
+        if not sub_dir.is_dir():
+            return []
+        found: list[tuple[Path, float]] = []
+        for f in sub_dir.rglob("*.jsonl"):
+            if f.name == "journal.jsonl":
+                continue  # dziennik workflow, nie rozmowa agenta
+            try:
+                found.append((f, f.stat().st_mtime))
+            except OSError:
+                continue
+        found.sort(key=lambda item: item[1], reverse=True)
+        return found[:limit]
 
     def _turn_state_cached(self, transcript: Path | None, mtime: float,
                            ) -> tuple[str, str, dict]:
@@ -345,6 +360,7 @@ class SessionScanner:
                 turn=turn,
                 turn_reason=turn_reason,
                 turn_params=turn_params,
+                subagent_files=self.subagent_transcripts(transcript),
             ))
 
         # Program chodzi calymi dobami, a sesji przybywa i ubywa. Bez sprzatania

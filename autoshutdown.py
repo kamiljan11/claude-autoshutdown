@@ -63,8 +63,19 @@ def enable_dpi_awareness() -> None:
 
 # Katalog stanu (config, log, plik STOP). Domyslnie obok programu; nadpisywalny,
 # zeby dalo sie uruchomic instancje testowa bez dotykania prawdziwej konfiguracji.
-APP_DIR = Path(os.environ.get("CLAUDE_AUTOSHUTDOWN_HOME")
-               or Path(__file__).resolve().parent)
+def _default_app_dir() -> Path:
+    """Katalog stanu obok programu.
+
+    Pod PyInstallerem (onefile) __file__ wskazuje na tymczasowy katalog _MEIPASS,
+    kasowany po zamknieciu - config, log i STOP znikalyby z kazdym uruchomieniem.
+    Wtedy wlasciwym "obok programu" jest katalog pliku .exe.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+APP_DIR = Path(os.environ.get("CLAUDE_AUTOSHUTDOWN_HOME") or _default_app_dir())
 APP_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = APP_DIR / "config.json"
 LOG_PATH = APP_DIR / "autoshutdown.log"
@@ -480,6 +491,8 @@ class ClaudeAutoShutdown:
         self.last_scan_error = ""
         self._preview_rendered: tuple[str, float] | None = None
         self._restoring_selection = False
+        self.selected_transcript: Path | None = None  # None = glowny transkrypt sesji
+        self._combo_index: dict[str, tuple[str, Path | None]] = {}
         self.log_lines: list[str] = []
         self.selected_session_id: str | None = None
 
@@ -488,6 +501,7 @@ class ClaudeAutoShutdown:
         # Wszystkie rozmiary podajemy logicznie i mnozymy przez skale monitora.
         self.dpi = self.root.winfo_fpixels("1i") / 96.0
         self.root.title("Claude AutoShutdown")
+        self._set_window_icon()
         # Rozmiar startowy przyciety do ekranu: na malym laptopie okno 1400x820
         # pomnozone przez skalowanie DPI wychodzilo poza obszar roboczy.
         screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
@@ -528,6 +542,21 @@ class ClaudeAutoShutdown:
         self.root.after(300, self._drain_queue)
         self.root.after(1000, self._tick_preview)
         self.root.after(5000, self._check_monitor_alive)
+
+    def _set_window_icon(self) -> None:
+        """Wlasna ikona zamiast piorka tkintera - w pasku tytulu i na pasku zadan.
+
+        Pod PyInstallerem zasoby leza w tymczasowym _MEIPASS, w zrodlach obok pliku.
+        Brak ikony nie jest bledem krytycznym - program ma dzialac i bez niej.
+        """
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        icon = base / "assets" / "icon.ico"
+        if not icon.exists():
+            return
+        try:
+            self.root.iconbitmap(default=str(icon))
+        except tk.TclError:
+            pass
 
     def px(self, logical: int) -> int:
         """Logiczne piksele -> fizyczne, wedlug skalowania monitora."""
@@ -661,6 +690,7 @@ class ClaudeAutoShutdown:
         selection = self.tree.selection()
         if selection:
             self.selected_session_id = selection[0]
+            self.selected_transcript = None
             self.preview_combo.set(self._combo_label_for(selection[0]))
 
     # --- strona: podglad ---------------------------------------------------
@@ -691,10 +721,9 @@ class ClaudeAutoShutdown:
 
     def _on_combo_select(self, _event: object) -> None:
         label = self.preview_combo.get()
-        for session in self.sessions:
-            if self._combo_label_for(session.session_id) == label:
-                self.selected_session_id = session.session_id
-                break
+        target = self._combo_index.get(label)
+        if target is not None:
+            self.selected_session_id, self.selected_transcript = target
         self._refresh_preview(force=True)
 
     def _combo_label_for(self, session_id: str) -> str:
@@ -702,6 +731,10 @@ class ClaudeAutoShutdown:
             if session.session_id == session_id:
                 return f"{session.name} - {session.short_cwd} ({session.surface}, PID {session.pid})"
         return session_id[:12]
+
+    def _subagent_label(self, path: Path, mtime: float) -> str:
+        return t("preview.subagent_entry", name=path.stem,
+                 age=fmt_duration(max(0.0, time.time() - mtime)))
 
     # --- strona: ustawienia ------------------------------------------------
     def _build_settings_page(self, page: tk.Frame) -> None:
@@ -1174,11 +1207,30 @@ class ClaudeAutoShutdown:
                      font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True)
 
     def _render_combo(self) -> None:
-        labels = [self._combo_label_for(s.session_id) for s in self.sessions]
-        self.preview_combo.configure(values=labels)
+        """Lista w Podgladzie: sesja, a pod nia jej subagenci (najswiezsi pierwsi).
+
+        Monitor pokazywal "13 subagentow pisze", a Podglad nie umial pokazac ani
+        jednego z nich - teraz kazdy jest wpisem do wyboru.
+        """
+        index: dict[str, tuple[str, Path | None]] = {}
+        for session in self.sessions:
+            index[self._combo_label_for(session.session_id)] = (session.session_id, None)
+            for path, mtime in session.subagent_files:
+                index[self._subagent_label(path, mtime)] = (session.session_id, path)
+        self._combo_index = index
+        current = self.preview_combo.get()
+        self.preview_combo.configure(values=list(index))
         if self.selected_session_id is None and self.sessions:
             self.selected_session_id = self.sessions[0].session_id
-        if self.selected_session_id and not self.preview_combo.get():
+        # Etykieta subagenta zawiera wiek ("2m 10s temu"), wiec zmienia sie co cykl;
+        # odnajdujemy biezacy wybor po sciezce, nie po tekscie.
+        wanted = (self.selected_session_id, self.selected_transcript)
+        for label, target in index.items():
+            if target == wanted:
+                if label != current:
+                    self.preview_combo.set(label)
+                return
+        if self.selected_session_id and not current:
             self.preview_combo.set(self._combo_label_for(self.selected_session_id))
 
     # --- podglad transkryptu ----------------------------------------------
@@ -1198,23 +1250,24 @@ class ClaudeAutoShutdown:
             if self.selected_session_id:
                 self.preview_status.config(text=t("preview.session_gone"))
             return
-        if session.transcript is None:
+        transcript = self.selected_transcript or session.transcript
+        if transcript is None:
             if force:
                 self._set_preview_text(t("preview.no_transcript"))
             return
 
         try:
-            mtime = session.transcript.stat().st_mtime
+            mtime = transcript.stat().st_mtime
         except OSError:
             mtime = 0.0
-        key = (str(session.transcript), mtime)
+        key = (str(transcript), mtime)
         if not force and key == self._preview_rendered:
             return  # nic sie nie zmienilo - nie kasujemy przewijania uzytkownika
         self._preview_rendered = key
 
         # Uzytkownik przewinal w gore? Zostaw go tam. Autoscroll tylko przy dole.
         at_bottom = self.preview_text.yview()[1] >= 0.999
-        events = tail_events(session.transcript, count=45)
+        events = tail_events(transcript, count=45)
         lines: list[tuple[str, str, str]] = [describe_event(e) for e in events]
         self.preview_text.configure(state="normal")
         self.preview_text.delete("1.0", "end")
@@ -1229,10 +1282,10 @@ class ClaudeAutoShutdown:
             self.preview_text.see("end")
         self.preview_text.configure(state="disabled")
 
-        age = time.time() - session.last_activity
+        age = time.time() - (mtime if self.selected_transcript else session.last_activity)
         self.preview_status.config(
             text=t("preview.status", state=session.state, d=fmt_duration(age),
-                   file=session.transcript.name))
+                   file=transcript.name))
 
     def _set_preview_text(self, text: str) -> None:
         self.preview_text.configure(state="normal")

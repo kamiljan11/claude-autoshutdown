@@ -9,7 +9,7 @@ idle. Built for unattended overnight agent runs.
 
 [![Python](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20only-lightgrey)](#requirements)
-[![Tests](https://img.shields.io/badge/tests-155%20passing-brightgreen)](#tests)
+[![Tests](https://img.shields.io/badge/tests-158%20passing-brightgreen)](#tests)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-none-brightgreen)](#requirements)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -181,20 +181,27 @@ The program must turn the machine off with nobody at the keyboard, so no step ma
 | **Python** | **3.14** (developed on 3.14.2 / 3.14.3, CI runs 3.14). Uses `datetime.UTC` (3.11+) and `X \| Y` unions; earlier 3.x versions are untested. Tkinter ships with the python.org installer. |
 | **Dependencies** | None at runtime — standard library only. `pytest` and `ruff` only for the test suite. |
 | **Claude Code** | Reads state from `~/.claude` (override with `CLAUDE_CONFIG_DIR`). Developed against Claude Code **2.1.24x–2.1.26x**; the session-registry and transcript formats are internal and undocumented, so a future Claude Code release could change them. If that happens the tool fails **closed** — unknown formats block shutdown, they never permit it. |
-| **Session types** | Verified with sessions launched from the Claude desktop app (Cowork, entrypoint `claude-desktop`). The npm-installed CLI also runs as a native `claude.exe` under a `claude-code\` path, so the same detection applies — but terminal-launched sessions have **not** been observed end-to-end on the development machine. |
+| **Session types** | Verified with sessions from the Claude desktop app (Cowork) **and** from the npm-installed CLI: a `claude -p` run from a terminal wrote its `sessions/<PID>.json` within 8 s of starting and removed it on exit, and its `claude.exe` lives under a `claude-code\` path, so the process cross-check applies to both. |
 
 Fresh-machine proof: the CI workflow installs and runs everything on a clean `windows-latest`
-runner with nothing but Python — lint, 155 unit tests and the 13-stage end-to-end run.
-
-There is no installer or `.exe` build; this is a clone-and-run Python project aimed at people
-who already run Claude Code.
+runner with nothing but Python — lint, 158 unit tests and the 13-stage end-to-end run.
 
 ## Install
+
+**Option A — standalone `.exe` (no Python needed).** Download `ClaudeAutoShutdown.exe` from
+the [Releases](https://github.com/kamiljan11/claude-autoshutdown/releases) page and run it.
+It keeps `config.json`, the log and the `STOP` file next to itself, so put it in a folder of
+its own. The binary is **not code-signed**, so Windows SmartScreen will warn on first run:
+"More info" → "Run anyway". You can build it yourself with `python build_exe.py`
+(PyInstaller, listed as the `build` extra in `pyproject.toml`), and the CI workflow builds it
+on every push as a downloadable artifact so you can compare.
+
+**Option B — from source.**
 
 ```bash
 git clone https://github.com/kamiljan11/claude-autoshutdown.git
 cd claude-autoshutdown
-python -m pytest -q          # optional: 155 tests
+python -m pytest -q          # optional: 158 tests
 ```
 
 Start it with **`Claude AutoShutdown.vbs`** (no console window), or
@@ -236,7 +243,7 @@ The state directory (config, log, `STOP` file) can be moved with `CLAUDE_AUTOSHU
 ## Tests
 
 ```bash
-python -m pytest -q      # 155 unit tests
+python -m pytest -q      # 158 unit tests
 python ultimate_test.py  # 13-stage end-to-end run
 ```
 

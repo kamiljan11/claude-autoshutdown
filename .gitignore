@@ -19,3 +19,7 @@ venv/
 .idea/
 Thumbs.db
 desktop.ini
+
+# PyInstaller build output
+build/
+dist/

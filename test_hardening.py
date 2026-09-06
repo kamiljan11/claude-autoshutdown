@@ -280,3 +280,45 @@ def test_nowe_klucze_maja_oba_jezyki():
     for key in ("countdown.reason.settings", "check.no_guards.scan_failed",
                 "power.timeout", "crash.title", "state.not_writable"):
         assert t(key) != key
+
+
+# --------------------------------------------------------------------------- #
+# podglad subagentow (#32)
+# --------------------------------------------------------------------------- #
+def test_subagent_transcripts_najswiezsze_pierwsze_bez_dziennika(tmp_path: Path):
+    import os
+
+    from monitor import SessionScanner
+
+    transcript = tmp_path / "s.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    deep = tmp_path / "s" / "subagents" / "workflows" / "wf_x"
+    deep.mkdir(parents=True)
+    old = deep / "agent-old.jsonl"
+    new = deep / "agent-new.jsonl"
+    journal = deep / "journal.jsonl"
+    for f in (old, new, journal):
+        f.write_text("{}\n", encoding="utf-8")
+    past = time.time() - 600
+    os.utime(old, (past, past))
+
+    found = SessionScanner.subagent_transcripts(transcript)
+    assert [p.name for p, _ in found] == ["agent-new.jsonl", "agent-old.jsonl"]
+    assert all(p.name != "journal.jsonl" for p, _ in found)
+
+
+def test_subagent_transcripts_limit(tmp_path: Path):
+    from monitor import SessionScanner
+
+    transcript = tmp_path / "s.jsonl"
+    transcript.write_text("{}\n", encoding="utf-8")
+    sub = tmp_path / "s" / "subagents"
+    sub.mkdir(parents=True)
+    for i in range(30):
+        (sub / f"agent-{i:02d}.jsonl").write_text("{}\n", encoding="utf-8")
+    assert len(SessionScanner.subagent_transcripts(transcript, limit=20)) == 20
+
+
+def test_subagent_transcripts_bez_transkryptu():
+    from monitor import SessionScanner
+    assert SessionScanner.subagent_transcripts(None) == []
