@@ -37,19 +37,21 @@ jobs:
       - name: Smoke-run the exe (starts, writes its log, exits)
         shell: pwsh
         run: |
-          $home = Join-Path $env:RUNNER_TEMP "asd-home"
-          New-Item -ItemType Directory -Force $home | Out-Null
-          $env:CLAUDE_AUTOSHUTDOWN_HOME = $home
+          # $home NIE - to wbudowana, tylko-do-odczytu zmienna PowerShell ($HOME);
+          # proba przypisania rzuca WriteError i wywraca caly krok (2026-09-06).
+          $stateDir = Join-Path $env:RUNNER_TEMP "asd-home"
+          New-Item -ItemType Directory -Force $stateDir | Out-Null
+          $env:CLAUDE_AUTOSHUTDOWN_HOME = $stateDir
           $env:CLAUDE_CONFIG_DIR = Join-Path $env:RUNNER_TEMP "fake-claude"
           New-Item -ItemType Directory -Force (Join-Path $env:CLAUDE_CONFIG_DIR "sessions") | Out-Null
           $p = Start-Process -FilePath dist\ClaudeAutoShutdown.exe -PassThru
           Start-Sleep -Seconds 15
           if ($p.HasExited) { throw "exe exited early with code $($p.ExitCode)" }
           Stop-Process -Id $p.Id -Force
-          $log = Join-Path $home "autoshutdown.log"
+          $log = Join-Path $stateDir "autoshutdown.log"
           if (-not (Test-Path $log)) { throw "exe did not write its log next to CLAUDE_AUTOSHUTDOWN_HOME" }
           Get-Content $log
-          if (Test-Path (Join-Path $home "crash.log")) { Get-Content (Join-Path $home "crash.log"); throw "exe crashed" }
+          if (Test-Path (Join-Path $stateDir "crash.log")) { Get-Content (Join-Path $stateDir "crash.log"); throw "exe crashed" }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: ClaudeAutoShutdown-exe
