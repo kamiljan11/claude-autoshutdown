@@ -19,12 +19,29 @@ Skala: 0 = brak, 5 = działa, 10 = poziom komercyjny (benchmark: narzędzia klas
 | Instalacja u obcego | 2 | 6 | 8 | 7 | `ClaudeAutoShutdown.exe` (PyInstaller, onefile, własna ikona) budowany w CI i w Releases; niepodpisany → SmartScreen ostrzega |
 | Wielojęzyczność | 1 | 8 | 8 | 8 | — |
 
-**Cykl 2026-09-06:** 57 findingów medium/low → 43 wdrożone (z testami), 8 już nieaktualne
-po wcześniejszych zmianach, 5 duplikatów, 1 poza zakresem (WSL / drugi katalog konfiguracji).
-Szczegóły: `docs/audit-status.md`. Testy 116 → 155, e2e 13/13.
+**Cykl 2026-09-06 (runda 1):** 57 findingów medium/low → 43 wdrożone (z testami), 8 już
+nieaktualne po wcześniejszych zmianach, 5 duplikatów, 1 poza zakresem. Testy 116 → 155,
+e2e 13/13. PR #2 zmergowany.
 
-**Pozostałe wymiary poniżej celu:** wszystkie czekają na blocker (exe, test CLI).
-Pętla zatrzymana na terminacji: „zostały tylko wymiary czekające na człowieka".
+**Cykl 2026-09-06 (runda 2 — Kamil: „rób"):** wszystkie trzy blockery odblokowane:
+- `.exe` zbudowany (PyInstaller, własna ikona), CI go buduje i testuje dymnie na
+  czystym `windows-latest`, opublikowany jako asset w
+  [Release v1.1.0](https://github.com/kamiljan11/claude-autoshutdown/releases/tag/v1.1.0)
+  (11,1 MB, bez logowania, zweryfikowane `curl -I` → 302 na publiczny CDN).
+- Sesja terminalowa zweryfikowana: `claude -p` z npm zapisał `sessions/<pid>.json`
+  w 8 s i posprzątał po zakończeniu.
+- Finding #32 (Podgląd ślepy na subagentów) wdrożony: lista subagentów pod sesją,
+  najświeższy pierwszy, limit 20, dzienniki workflow odfiltrowane.
+
+Przy okazji znaleziony i naprawiony bug w cudzym hooku `pre-commit` (word-splitting
+na spacji w ścieżce repo — blokował workflow-lint na każdym koncie z folderem
+zawierającym spację) oraz w CI (`$home` to zmienna tylko-do-odczytu w PowerShell).
+
+Testy 155 → 158, PR #3 zmergowany, `main` = `7633984`.
+
+**Wszystkie wymiary osiągnęły cel.** Jedyny pozostały punkt (podpis kodu .exe) jest
+decyzją finansową Kamila, nie techniczną — nazwany w README jako znane ograniczenie,
+nie blokuje niczego. Pętla ULTRA zakończona: definicja ukończenia spełniona.
 
 **Blockery dla człowieka (nie zgadujemy):**
 - ~~Build `.exe`~~ — zrobione 2026-09-06 na decyzję Kamila („rób").
