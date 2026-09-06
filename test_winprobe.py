@@ -125,13 +125,21 @@ def test_blad_uruchomienia_procesu_to_porazka(monkeypatch):
 
 
 @WINDOWS_ONLY
-def test_przekroczony_czas_nie_jest_traktowany_jak_porazka(monkeypatch):
+def test_przekroczony_czas_jest_porazka(monkeypatch):
+    """Zmiana semantyki po audycie (finding 25).
+
+    Poprzednio timeout liczyl sie jako sukces ("komenda dziala dluzej"). To bylo
+    klamstwo: subprocess.run po TimeoutExpired ZABIJA proces potomny, wiec
+    shutdown.exe nie mial szansy niczego zrobic, a program meldowal AKCJA WYKONANA
+    i zostawal uzbrojony na noc z wlaczonym komputerem.
+    """
     def slow(*_a, **_k):
         raise subprocess.TimeoutExpired(cmd="shutdown", timeout=25)
 
     monkeypatch.setattr(subprocess, "run", slow)
-    ok, _ = power_action("shutdown")
-    assert ok, "wolna komenda to nie to samo co odrzucona komenda"
+    ok, detail = power_action("shutdown")
+    assert not ok
+    assert "25" in detail
 
 
 # --------------------------------------------------------------------------- #

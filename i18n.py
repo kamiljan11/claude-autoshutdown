@@ -253,6 +253,21 @@ STRINGS: dict[str, dict[str, str]] = {
         "countdown.reason.unknown": "source unknown",
         "countdown.reason.disarm": "disarmed during countdown",
         "countdown.reason.conditions": "conditions no longer met ({blockers})",
+        "countdown.reason.settings": "settings changed during countdown",
+        "countdown.reason.close_app": "program closed during countdown",
+        "countdown.note_no_idle": "New session activity aborts the action (user idle check is off)",
+        "check.no_guards.scan_failed": "could not read the process list - blocking to be safe",
+        "scan.future_mtime": "{name}: transcript timestamp is in the future (clock skew?)",
+        "preview.session_gone": "This session has ended - showing its last known transcript.",
+        "preview.no_events": "No conversation records in the transcript yet.",
+        "power.timeout": "{label} - command did not finish within {seconds}s and was killed: {cmd}",
+        "log.crash": "CRASH: {error} (full traceback in crash.log)",
+        "crash.title": "Claude AutoShutdown crashed",
+        "crash.body": "The program hit an unexpected error and is NOT monitoring anymore.\n\n"
+                      "Details: {path}",
+        "state.not_writable": "Cannot write to the program folder:\n{path}\n\nWithout it there is "
+                              "no log, no lock file and no STOP switch. Move the program or set "
+                              "CLAUDE_AUTOSHUTDOWN_HOME.",
         # --- dialogs after action ----------------------------------------------------------------------
         "dry.title": "Dry run",
         "dry.body": "Conditions met - in live mode the computer would now get the action: {label}.",
@@ -467,6 +482,20 @@ STRINGS: dict[str, dict[str, str]] = {
         "countdown.reason.unknown": "zrodlo nieznane",
         "countdown.reason.disarm": "rozbrojenie w trakcie odliczania",
         "countdown.reason.conditions": "warunki przestaly byc spelnione ({blockers})",
+        "countdown.reason.settings": "zmiana ustawien w trakcie odliczania",
+        "countdown.reason.close_app": "zamkniecie programu w trakcie odliczania",
+        "countdown.note_no_idle": "Nowa aktywnosc sesji przerwie akcje (bramka bezczynnosci wylaczona)",
+        "check.no_guards.scan_failed": "nie moge odczytac listy procesow - blokuje dla bezpieczenstwa",
+        "scan.future_mtime": "{name}: czas zapisu transkryptu jest w przyszlosci (zegar?)",
+        "preview.session_gone": "Ta sesja sie zakonczyla - pokazuje ostatni znany transkrypt.",
+        "preview.no_events": "W transkrypcie nie ma jeszcze rekordow rozmowy.",
+        "power.timeout": "{label} - komenda nie skonczyla sie w {seconds}s i zostala ubita: {cmd}",
+        "log.crash": "AWARIA: {error} (pelny traceback w crash.log)",
+        "crash.title": "Claude AutoShutdown - awaria",
+        "crash.body": "Program napotkal nieoczekiwany blad i JUZ NIE PILNUJE.\n\nSzczegoly: {path}",
+        "state.not_writable": "Nie moge pisac do katalogu programu:\n{path}\n\nBez tego nie ma "
+                              "logu, blokady ani hamulca STOP. Przenies program albo ustaw "
+                              "CLAUDE_AUTOSHUTDOWN_HOME.",
         "dry.title": "Tryb prob",
         "dry.body": "Warunki spelnione - w trybie bojowym komputer zostalby teraz obsluzony "
                     "akcja: {label}.",

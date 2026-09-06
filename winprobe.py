@@ -15,6 +15,7 @@ import ctypes
 import os
 import subprocess
 import sys
+import threading
 from ctypes import wintypes
 from dataclasses import dataclass
 
@@ -183,14 +184,32 @@ def power_action(name: str, force: bool = True) -> tuple[bool, str]:
 
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     printable = " ".join(args)
+    if name == "sleep":
+        # rundll32 przekazuje argumenty jako NAPIS, a SetSuspendState oczekuje trzech
+        # BOOLEAN - "0,1,0" bylo ignorowane. Wolamy API wprost: Hibernate=FALSE,
+        # ForceCritical=FALSE, DisableWakeEvent=FALSE. Funkcja wraca dopiero po
+        # wybudzeniu, wiec leci w osobnym watku, zeby nie zawiesic GUI.
+        def _suspend() -> None:
+            try:
+                ctypes.windll.powrprof.SetSuspendState(0, 0, 0)
+            except (AttributeError, OSError):
+                pass
+
+        threading.Thread(target=_suspend, name="suspend", daemon=True).start()
+        return True, t("power.sent", label=action.label, cmd="SetSuspendState(0,0,0)")
     if not action.wait_for_exit:
         subprocess.Popen(args, creationflags=flags)
         return True, t("power.sent", label=action.label, cmd=printable)
     try:
         done = subprocess.run(args, capture_output=True, text=True, check=False,
+                              encoding="utf-8", errors="replace",
                               timeout=ACTION_TIMEOUT_SECONDS, creationflags=flags)
     except subprocess.TimeoutExpired:
-        return True, t("power.slow", label=action.label, cmd=printable)
+        # subprocess.run po timeoucie ZABIJA dziecko. shutdown.exe normalnie
+        # wraca w ulamku sekundy - jesli wisi 25 s, cos jest nie tak, a my
+        # wlasnie je ubilismy. To porazka, nie "trwa dluzej niz zwykle".
+        return False, t("power.timeout", label=action.label, cmd=printable,
+                        seconds=ACTION_TIMEOUT_SECONDS)
     except OSError as exc:
         return False, t("power.cannot_start", label=action.label, error=exc)
 
@@ -273,16 +292,19 @@ def available_sleep_states() -> str:
         return ""
     try:
         out = subprocess.run(["powercfg", "/a"], capture_output=True, text=True,
-                             timeout=10, check=False,
+                             timeout=10, check=False, encoding="utf-8", errors="replace",
                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     except (OSError, subprocess.SubprocessError):
         return ""
     supported: list[str] = []
     for line in out.stdout.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.endswith(":"):
-            continue
+        # Naglowek "...are NOT available on this system:" konczy sie dwukropkiem.
+        # Sprawdzamy go PRZED pominieciem naglowkow - inaczej break nigdy nie
+        # zachodzi i lista "wspieranych" zawiera stany, ktorych system nie ma.
         if "not available" in stripped.lower() or "niedostep" in stripped.lower():
             break
+        if not stripped or stripped.endswith(":"):
+            continue
         supported.append(stripped)
     return ", ".join(supported[:4])

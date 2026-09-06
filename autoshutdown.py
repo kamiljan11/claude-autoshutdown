@@ -76,6 +76,8 @@ AUTOARM = os.environ.get("CLAUDE_AUTOSHUTDOWN_AUTOARM") == "1"
 
 LOCK_FILE = APP_DIR / "instance.lock"
 LOG_MAX_BYTES = 5 * 1024 * 1024
+COUNTDOWN_COOLDOWN_SECONDS = 60.0     # po anulowaniu nie startujemy od razu kolejnego
+PROCESS_SCAN_IDLE_SECONDS = 60.0      # tasklist gdy rozbrojony: co minute, nie co cykl
 
 DEFAULT_CONFIG: dict = {
     "poll_seconds": 10,
@@ -105,23 +107,125 @@ WARN_COLOR = "#d29922"
 BAD_COLOR = "#f85149"
 
 
-def load_config() -> dict:
+# Ostrzezenia z ostatniego load_config() - GUI wypisuje je do logu przy starcie,
+# zeby recznie zepsuty config.json nie byl cicho "naprawiany" bez sladu.
+CONFIG_WARNINGS: list[str] = []
+
+_INT_BOUNDS: dict[str, tuple[int, int]] = {
+    # klucz: (minimum, maksimum) - dolne granice to bezpieczniki, nie estetyka:
+    # countdown 0 = brak szansy na ANULUJ, poll 0 = petla zajeta, polls 0 = brak potwierdzen
+    "quiet_seconds": (10, 86_400),
+    "poll_seconds": (2, 3_600),
+    "required_polls": (1, 100),
+    "countdown_seconds": (5, 3_600),
+    "human_idle_required": (0, 86_400),
+}
+_BOOL_KEYS = ("dry_run", "require_human_idle", "allow_zero_sessions",
+              "arm_on_start", "force_close_apps")
+_TRUE_WORDS = {"true", "yes", "on", "1"}
+_FALSE_WORDS = {"false", "no", "off", "0", ""}
+
+
+def _coerce_bool(key: str, value: object, warnings: list[str]) -> bool:
+    """bool() na napisie "false" daje True - to wlaczaloby najgrozniejsze opcje."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in _TRUE_WORDS:
+            return True
+        if word in _FALSE_WORDS:
+            return False
+    warnings.append(f"{key}: niezrozumiala wartosc {value!r}, uzywam domyslnej")
+    return bool(DEFAULT_CONFIG[key])
+
+
+def _coerce_int(key: str, value: object, warnings: list[str]) -> int:
+    lo, hi = _INT_BOUNDS[key]
+    try:
+        number = int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        warnings.append(f"{key}: {value!r} nie jest liczba, uzywam domyslnej")
+        return int(DEFAULT_CONFIG[key])
+    if number < lo or number > hi:
+        warnings.append(f"{key}: {number} poza zakresem {lo}-{hi}, przycinam")
+    return max(lo, min(number, hi))
+
+
+def validate_config(raw: dict) -> tuple[dict, list[str]]:
+    """Zwraca (bezpieczna konfiguracja, lista ostrzezen). Nigdy nie rzuca."""
+    warnings: list[str] = []
     cfg = dict(DEFAULT_CONFIG)
+    for key in _BOOL_KEYS:
+        if key in raw:
+            cfg[key] = _coerce_bool(key, raw[key], warnings)
+    for key in _INT_BOUNDS:
+        if key in raw:
+            cfg[key] = _coerce_int(key, raw[key], warnings)
+
+    action = str(raw.get("action") or DEFAULT_CONFIG["action"])
+    if action not in winprobe.POWER_ACTIONS:
+        # Nieznana akcja NIE moze cicho zamienic sie w "wylacz komputer".
+        warnings.append(f"action: nieznana wartosc {action!r}, przelaczam na 'nothing'")
+        action = "nothing"
+    cfg["action"] = action
+
+    guards = raw.get("guard_patterns", [])
+    if isinstance(guards, str):
+        guards = [p.strip() for p in guards.split(",") if p.strip()]
+    elif isinstance(guards, list):
+        guards = [str(p).strip() for p in guards if str(p).strip()]
+    else:
+        warnings.append("guard_patterns: oczekiwana lista, ignoruje")
+        guards = []
+    cfg["guard_patterns"] = guards
+
+    language = raw.get("language", DEFAULT_CONFIG["language"])
+    cfg["language"] = str(language) if isinstance(language, str) else DEFAULT_CONFIG["language"]
+    return cfg, warnings
+
+
+def load_config() -> dict:
+    """Czyta config.json i zawsze zwraca bezpieczna konfiguracje.
+
+    Tryb prob DZIEDZICZY sie z pliku - jesli uzytkownik swiadomie go zdjal, ma zostac
+    zdjety. Tym, czego nigdy nie dziedziczymy, jest UZBROJENIE: program zawsze
+    startuje rozbrojony (ClaudeAutoShutdown.armed = False).
+    """
+    raw: dict = {}
+    warnings: list[str] = []
     if CONFIG_PATH.exists():
         try:
-            cfg.update(json.loads(CONFIG_PATH.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError):
-            pass
-    # UWAGA: tryb prob DZIEDZICZY sie z pliku - jesli uzytkownik swiadomie go zdjal,
-    # ma zostac zdjety. Tym, czego nigdy nie dziedziczymy, jest UZBROJENIE:
-    # program zawsze startuje rozbrojony (ClaudeAutoShutdown.armed = False).
-    cfg["dry_run"] = bool(cfg.get("dry_run", True))
+            loaded = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            # ValueError obejmuje JSONDecodeError i UnicodeDecodeError (plik w ANSI).
+            warnings.append(f"config.json nieczytelny ({exc}), uzywam domyslnych")
+            loaded = {}
+        if isinstance(loaded, dict):
+            raw = loaded
+        else:
+            warnings.append("config.json nie jest obiektem JSON, uzywam domyslnych")
+    cfg, more = validate_config(raw)
+    CONFIG_WARNINGS[:] = warnings + more
     set_language(str(cfg.get("language") or AUTO))
     return cfg
 
 
 def save_config(cfg: dict) -> None:
-    CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    """Zapis atomowy: przerwany zapis nie zostawia polowy pliku (= domyslne = shutdown)."""
+    tmp = CONFIG_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, CONFIG_PATH)
+
+
+def stop_file_present() -> bool:
+    """Hamulec: STOP, STOP.txt, stop.txt... - Eksplorator dokleja rozszerzenie po cichu."""
+    try:
+        return any(p.name.lower() in ("stop", "stop.txt") for p in APP_DIR.iterdir())
+    except OSError:
+        return True  # nie umiem sprawdzic hamulca = traktuje jak zaciagniety
 
 
 def rotate_log_if_needed() -> None:
@@ -189,6 +293,9 @@ class MonitorThread(threading.Thread):
         self.stable_polls = 0
         self.saw_any_session = False
         self.last_session_seen = 0.0
+        self.last_process_scan = 0.0
+        self.cached_guard_hits: list[str] | None = []
+        self.cached_stray_pids: list[int] = []
 
     def stop(self) -> None:
         self._stop.set()
@@ -223,26 +330,33 @@ class MonitorThread(threading.Thread):
             self.last_session_seen = time.time()
 
         patterns = list(cfg.get("guard_patterns") or [])
+        # tasklist kosztuje ~0,5 s. Rozbrojony program nie potrzebuje go co 10 s -
+        # odswiezamy wtedy co PROCESS_SCAN_IDLE_SECONDS, a zawsze gdy uzbrojony.
+        now = time.time()
+        if self.app.armed or now - self.last_process_scan >= PROCESS_SCAN_IDLE_SECONDS:
+            self.last_process_scan = now
+            self.cached_guard_hits = matching_guard_processes(patterns)
+            self.cached_stray_pids = (
+                claude_processes_without_registry({s.pid for s in sessions})
+                if self.scanner.is_default_root else [])
         verdict = evaluate(
             sessions,
             quiet_seconds=float(cfg["quiet_seconds"]),
             armed=self.app.armed,
-            stop_file_present=STOP_FILE.exists(),
+            stop_file_present=stop_file_present(),
             human_idle=winprobe.human_idle_seconds(),
             require_human_idle=bool(cfg["require_human_idle"]),
             human_idle_required=float(cfg["human_idle_required"]),
             allow_zero_sessions=bool(cfg["allow_zero_sessions"]),
             saw_any_session=self.saw_any_session,
             guard_patterns=patterns,
-            guard_hits=matching_guard_processes(patterns),
+            guard_hits=self.cached_guard_hits,
             stable_polls=self.stable_polls,
             required_polls=int(cfg["required_polls"]),
             scan_error=self.scanner.last_error,
             seconds_since_last_session=(time.time() - self.last_session_seen
                                         if self.last_session_seen else 0.0),
-            unregistered_pids=(
-                claude_processes_without_registry({s.pid for s in sessions})
-                if self.scanner.is_default_root else []),
+            unregistered_pids=self.cached_stray_pids,
         )
         self.stable_polls = verdict.stable_polls
         self.results.put(("snapshot", (sessions, verdict, self.scanner.last_error)))
@@ -254,11 +368,18 @@ class MonitorThread(threading.Thread):
 class CountdownWindow(tk.Toplevel):
     """Ostatnia bramka przed akcja. Zamkniecie okna = anulowanie."""
 
-    def __init__(self, app: ClaudeAutoShutdown, seconds: int, action_label: str) -> None:
+    def __init__(self, app: ClaudeAutoShutdown, seconds: int, action_label: str,
+                 action: str, dry_run: bool) -> None:
         super().__init__(app.root)
         self.app = app
-        self.remaining = seconds
+        self.remaining = max(1, seconds)
         self.cancelled = False
+        # Akcja i tryb sa ZAMROZONE w chwili startu odliczania. Wczesniej okno
+        # pokazywalo "[DRY RUN]", a execute_action czytal config ponownie po 90 s -
+        # zapis ustawien w miedzyczasie mogl zamienic probe w prawdziwe wylaczenie.
+        self.action = action
+        self.dry_run = dry_run
+        self.initial = self.remaining  # do "dzwon na starcie i w ostatnich 5 s"
 
         self.title(t("countdown.title"))
         self.configure(bg=BG)
@@ -277,7 +398,11 @@ class CountdownWindow(tk.Toplevel):
                                 font=("Segoe UI", 72, "bold"))
         self.counter.pack(pady=6)
 
-        self.note = tk.Label(self, text=t("countdown.note"),
+        # Obietnica "ruch myszy przerwie akcje" jest prawdziwa tylko, gdy bramka
+        # bezczynnosci uzytkownika jest wlaczona. Inaczej napis klamalby.
+        note_key = ("countdown.note" if app.cfg.get("require_human_idle", True)
+                    else "countdown.note_no_idle")
+        self.note = tk.Label(self, text=t(note_key),
                              bg=BG, fg=FG_DIM, font=("Segoe UI", 9))
         self.note.pack()
 
@@ -296,6 +421,14 @@ class CountdownWindow(tk.Toplevel):
 
         self.lift()
         self.cancel_button.focus_set()
+
+    def start(self) -> None:
+        """Odliczanie rusza DOPIERO gdy aplikacja ma juz referencje do okna.
+
+        Wczesniej __init__ wolal _tick() sam - przy countdown_seconds<=0 akcja
+        odpalala z okna, ktorego app.countdown jeszcze nie znal, wiec anulowanie
+        nie mialo czego anulowac.
+        """
         self._tick()
 
     def _tick(self) -> None:
@@ -305,10 +438,12 @@ class CountdownWindow(tk.Toplevel):
             self.fire()
             return
         self.counter.config(text=str(self.remaining))
-        try:
-            self.bell()
-        except tk.TclError:
-            pass
+        # Dzwiek na starcie i w ostatnich 5 s - nie co sekunde przez 90 s.
+        if self.remaining == self.initial or self.remaining <= 5:
+            try:
+                self.bell()
+            except tk.TclError:
+                pass
         self.remaining -= 1
         self.after(1000, self._tick)
 
@@ -325,7 +460,7 @@ class CountdownWindow(tk.Toplevel):
             return
         self.cancelled = True
         self.destroy()
-        self.app.execute_action()
+        self.app.execute_action(self.action, self.dry_run)
 
 
 # --------------------------------------------------------------------------- #
@@ -342,6 +477,9 @@ class ClaudeAutoShutdown:
         self.last_snapshot = time.time()
         self.last_cancel = 0.0
         self.last_blockers: list[str] = []
+        self.last_scan_error = ""
+        self._preview_rendered: tuple[str, float] | None = None
+        self._restoring_selection = False
         self.log_lines: list[str] = []
         self.selected_session_id: str | None = None
 
@@ -350,8 +488,13 @@ class ClaudeAutoShutdown:
         # Wszystkie rozmiary podajemy logicznie i mnozymy przez skale monitora.
         self.dpi = self.root.winfo_fpixels("1i") / 96.0
         self.root.title("Claude AutoShutdown")
-        self.root.geometry(f"{self.px(1400)}x{self.px(820)}")
-        self.root.minsize(self.px(1000), self.px(620))
+        # Rozmiar startowy przyciety do ekranu: na malym laptopie okno 1400x820
+        # pomnozone przez skalowanie DPI wychodzilo poza obszar roboczy.
+        screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        width = min(self.px(1400), int(screen_w * 0.95))
+        height = min(self.px(820), int(screen_h * 0.9))
+        self.root.geometry(f"{width}x{height}")
+        self.root.minsize(min(self.px(1000), width), min(self.px(620), height))
         self.root.configure(bg=BG)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -513,6 +656,8 @@ class ClaudeAutoShutdown:
         self.checks_frame.pack(fill="both", expand=True, padx=18, pady=(0, 18))
 
     def _on_tree_select(self, _event: object) -> None:
+        if getattr(self, "_restoring_selection", False):
+            return
         selection = self.tree.selection()
         if selection:
             self.selected_session_id = selection[0]
@@ -675,6 +820,10 @@ class ClaudeAutoShutdown:
         new_cfg["guard_patterns"] = [p.strip() for p in self.guard_var.get().split(",")
                                      if p.strip()]
         self.cfg = new_cfg
+        # Zmiana ustawien w trakcie odliczania: okno pokazuje stara akcje/tryb,
+        # wiec odliczanie trzeba przerwac, a nie pozwolic mu wykonac cos innego.
+        if self.countdown is not None:
+            self.countdown.cancel(t("countdown.reason.settings"))
         try:
             save_config(self.cfg)
         except OSError as exc:
@@ -788,8 +937,13 @@ class ClaudeAutoShutdown:
                     self.sessions = sessions
                     self.verdict = verdict
                     snapshot_at = self.last_snapshot = time.time()
-                    if scan_error:
-                        self._append_log(log_line(t("log.scanner_warning", error=scan_error)))
+                    # Trwaly blad skanera logujemy przy ZMIANIE tresci, nie co cykl -
+                    # inaczej jeden zepsuty plik zalewa log tysiacami identycznych linii.
+                    if scan_error != self.last_scan_error:
+                        self.last_scan_error = scan_error
+                        if scan_error:
+                            self._append_log(log_line(t("log.scanner_warning",
+                                                        error=scan_error)))
                     self._render_all()
                     self._log_blocker_change(verdict)
                     self._maybe_trigger(verdict, snapshot_at)
@@ -815,16 +969,20 @@ class ClaudeAutoShutdown:
         """
         if self.closing:
             return
-        stale_after = max(30.0, 3 * float(self.cfg["poll_seconds"]))
-        age = time.time() - self.last_snapshot
-        if age > stale_after and self.monitor.is_alive():
-            self.state_label.config(text=t("header.monitor_silent"), fg=BAD_COLOR)
-            self.verdict_label.config(text=t("header.stale", d=fmt_duration(age)),
-                                      fg=BAD_COLOR)
-        elif not self.monitor.is_alive():
-            self.state_label.config(text=t("header.monitor_dead"), fg=BAD_COLOR)
-            self.verdict_label.config(text=t("header.dead"), fg=BAD_COLOR)
-        self.root.after(5000, self._check_monitor_alive)
+        try:
+            stale_after = max(30.0, 3 * float(self.cfg["poll_seconds"]))
+            age = time.time() - self.last_snapshot
+            if age > stale_after and self.monitor.is_alive():
+                self.state_label.config(text=t("header.monitor_silent"), fg=BAD_COLOR)
+                self.verdict_label.config(text=t("header.stale", d=fmt_duration(age)),
+                                          fg=BAD_COLOR)
+            elif not self.monitor.is_alive():
+                self.state_label.config(text=t("header.monitor_dead"), fg=BAD_COLOR)
+                self.verdict_label.config(text=t("header.dead"), fg=BAD_COLOR)
+        except Exception:  # noqa: BLE001 - ostatni straznik nie moze umrzec razem z monitorem
+            log_line(t("log.gui_error", error=traceback.format_exc().splitlines()[-1]))
+        finally:
+            self.root.after(5000, self._check_monitor_alive)
 
     def _log_blocker_change(self, verdict: Verdict) -> None:
         """Zapisuje, CO sie zmienilo w powodach czekania.
@@ -860,13 +1018,23 @@ class ClaudeAutoShutdown:
             # natychmiast otwieralby kolejne okno odliczania.
             return
         if verdict.ok and self.armed:
-            label = winprobe.POWER_ACTIONS[self.cfg["action"]].label
-            if self.cfg["dry_run"]:
+            # Cooldown po anulowaniu: bez niego odliczanie potrafilo restartowac sie
+            # co cykl (zmierzone w audycie: 108 przerwanych odliczan w jednym logu),
+            # z nowym oknem na wierzchu za kazdym razem.
+            since_cancel = time.time() - self.last_cancel
+            if self.last_cancel and since_cancel < COUNTDOWN_COOLDOWN_SECONDS:
+                return
+            action, dry_run = self.cfg["action"], bool(self.cfg["dry_run"])
+            label = winprobe.POWER_ACTIONS[action].label
+            if dry_run:
                 label += f"  [{t('log.mode_dry').upper()}]"
             self._append_log(log_line(t(
                 "log.countdown_start", a=verdict.stable_polls, b=verdict.required_polls,
                 s=self.cfg["countdown_seconds"])))
-            self.countdown = CountdownWindow(self, int(self.cfg["countdown_seconds"]), label)
+            window = CountdownWindow(self, int(self.cfg["countdown_seconds"]), label,
+                                     action=action, dry_run=dry_run)
+            self.countdown = window
+            window.start()
 
     def on_countdown_cancelled(self, reason: str) -> None:
         self.countdown = None
@@ -875,14 +1043,18 @@ class ClaudeAutoShutdown:
         self._append_log(log_line(t("log.countdown_cancelled", reason=reason)))
         self._render_header()
 
-    def execute_action(self) -> None:
+    def execute_action(self, action: str | None = None, dry_run: bool | None = None) -> None:
         self.countdown = None
+        # Parametry przychodza z okna odliczania (zamrozone w chwili startu). Brak
+        # parametrow = wywolanie spoza odliczania - bierzemy biezaca konfiguracje.
+        action = action if action is not None else str(self.cfg["action"])
+        dry_run = bool(self.cfg["dry_run"]) if dry_run is None else dry_run
         # Ostatnia bramka tuz przed akcja. Miedzy startem odliczania a ta chwila
         # uzytkownik mogl rozbroic program albo postawic plik STOP.
         if not self.armed:
             self._append_log(log_line(t("log.skipped_disarmed")))
             return
-        if STOP_FILE.exists():
+        if stop_file_present():
             self._append_log(log_line(t("log.skipped_stop")))
             self.armed = False
             self._render_header()
@@ -898,8 +1070,7 @@ class ClaudeAutoShutdown:
             self._render_header()
             messagebox.showwarning(t("action.stale_title"), t("action.stale_body"))
             return
-        action = self.cfg["action"]
-        if self.cfg["dry_run"]:
+        if dry_run:
             label = winprobe.POWER_ACTIONS[action].label
             self._append_log(log_line(t("log.dry_run", label=label)))
             self.armed = False
@@ -911,6 +1082,12 @@ class ClaudeAutoShutdown:
             action, force=bool(self.cfg.get("force_close_apps", True)))
         if ok:
             self._append_log(log_line(t("log.action_done", detail=detail)))
+            # Po wykonanej akcji program sie rozbraja. Przy akcjach, po ktorych
+            # komputer dalej chodzi (lock, sleep po wybudzeniu), uzbrojony program
+            # zaczynalby kolejne odliczanie co cykl.
+            self.armed = False
+            self.monitor.reset_stability()
+            self._render_header()
             return
         # Cicha porazka byla by najgorsza: uzytkownik mysli ze komputer zgasl,
         # a rano zastaje go wlaczonego bez sladu dlaczego.
@@ -970,9 +1147,15 @@ class ClaudeAutoShutdown:
                         fmt_duration(session.silence), f"{session.cpu_percent:.1f}%",
                         subs, session.pid),
                 tags=("working" if session.working else "idle",))
-        for iid in selected:
-            if self.tree.exists(iid):
-                self.tree.selection_add(iid)
+        # Odtworzenie zaznaczenia odpala <<TreeviewSelect>>, ktory cofalby co cykl
+        # wybor sesji zrobiony recznie w Podgladzie. Flaga wycisza handler.
+        self._restoring_selection = True
+        try:
+            for iid in selected:
+                if self.tree.exists(iid):
+                    self.tree.selection_add(iid)
+        finally:
+            self._restoring_selection = False
 
     def _render_checks(self) -> None:
         for child in self.checks_frame.winfo_children():
@@ -1009,21 +1192,41 @@ class ClaudeAutoShutdown:
     def _refresh_preview(self, force: bool = False) -> None:
         session = next((s for s in self.sessions
                         if s.session_id == self.selected_session_id), None)
-        if session is None or session.transcript is None:
+        if session is None:
+            # Sesja zniknela - podglad nie moze dalej pokazywac "PRACUJE" na
+            # starej tresci. Zostawiamy tekst, ale status mowi prawde.
+            if self.selected_session_id:
+                self.preview_status.config(text=t("preview.session_gone"))
+            return
+        if session.transcript is None:
             if force:
                 self._set_preview_text(t("preview.no_transcript"))
             return
 
+        try:
+            mtime = session.transcript.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        key = (str(session.transcript), mtime)
+        if not force and key == self._preview_rendered:
+            return  # nic sie nie zmienilo - nie kasujemy przewijania uzytkownika
+        self._preview_rendered = key
+
+        # Uzytkownik przewinal w gore? Zostaw go tam. Autoscroll tylko przy dole.
+        at_bottom = self.preview_text.yview()[1] >= 0.999
         events = tail_events(session.transcript, count=45)
         lines: list[tuple[str, str, str]] = [describe_event(e) for e in events]
         self.preview_text.configure(state="normal")
         self.preview_text.delete("1.0", "end")
+        if not lines:
+            self.preview_text.insert("end", t("preview.no_events"))
         for ts, who, text in lines:
             self.preview_text.insert("end", f"{ts} ", "time")
             self.preview_text.insert("end", f"{who}: ", "who")
             self.preview_text.insert("end", text + "\n",
                                      "tool" if text.startswith(("->", "<-")) else "")
-        self.preview_text.see("end")
+        if at_bottom or force:
+            self.preview_text.see("end")
         self.preview_text.configure(state="disabled")
 
         age = time.time() - session.last_activity
@@ -1041,6 +1244,9 @@ class ClaudeAutoShutdown:
     def on_close(self) -> None:
         if self.armed and not messagebox.askyesno(t("close.title"), t("close.body")):
             return
+        if self.countdown is not None:
+            # Zamkniecie programu w trakcie odliczania ma zostawic slad w logu.
+            self.countdown.cancel(t("countdown.reason.close_app"))
         self._append_log(log_line(t("log.closing")))
         self.closing = True
         self.monitor.stop()
@@ -1051,7 +1257,43 @@ class ClaudeAutoShutdown:
         self.root.mainloop()
 
 
+def _report_crash(exc_type, exc, tb) -> None:
+    """Pod pythonw nie ma konsoli - nieobsluzony wyjatek ginalby bez sladu,
+    a uzytkownik myslalby, ze program pilnuje. Zapis do logu + okno."""
+    text = "".join(traceback.format_exception(exc_type, exc, tb))
+    log_line(t("log.crash", error=text.strip().splitlines()[-1]))
+    try:
+        (APP_DIR / "crash.log").write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(t("crash.title"), t("crash.body", path=APP_DIR / "crash.log"))
+        root.destroy()
+    except tk.TclError:
+        pass
+
+
+def state_dir_writable() -> bool:
+    """Katalog stanu MUSI byc zapisywalny: bez tego nie ma logu, blokady ani STOP."""
+    probe = APP_DIR / ".write-test"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def main() -> None:
+    sys.excepthook = _report_crash
+    if not state_dir_writable():
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(t("crash.title"), t("state.not_writable", path=APP_DIR))
+        root.destroy()
+        return
     other = another_instance_running()
     if other is not None:
         root = tk.Tk()
