@@ -266,8 +266,8 @@ the machine down mid-run.
 ## Limitations
 
 - A session waiting for **your** answer to a permission prompt has an open turn, so it blocks
-  shutdown. Intentional — but a pending approval keeps the machine on. Since v1.2 the program
-  says so out loud: an open turn with no transcript writes for 30 minutes puts a red line in
+  shutdown. Intentional — but a pending approval keeps the machine on. The program
+  now says so out loud: an open turn with no transcript writes for 30 minutes puts a red line in
   the header (*"Sessions waiting on you: 1"*), colours the row, rings the bell once and writes
   one entry to the log. **The gate itself is unchanged** — the work really is half-finished, so
   the machine stays on. You just no longer have to guess why.

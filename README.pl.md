@@ -226,7 +226,7 @@ nie dotyka.
 
 - Sesja czekająca na Twoją odpowiedź na pytanie o uprawnienia ma **otwartą turę**,
   więc liczy się jako pracująca i zablokuje wyłączenie. To celowe, ale znaczy tyle,
-  że wisząca zgoda trzyma komputer włączony. Od v1.2 program to **mówi**: otwarta tura
+  że wisząca zgoda trzyma komputer włączony. Program to teraz **mówi**: otwarta tura
   bez ani jednego zapisu przez 30 minut zapala czerwoną linię w nagłówku
   (*„Sesje czekające na Ciebie: 1"*), podświetla wiersz, dzwoni raz i zostawia jeden
   wpis w logu. **Bramka się nie zmienia** — praca naprawdę jest w połowie, więc komputer
