@@ -50,7 +50,16 @@ zmian**. Brakowało jednego: powiedzieć wprost, że czeka się na CZŁOWIEKA, n
 Wdrożone: `Session.stalled` (tura OPEN + zero subagentów + 30 min bez zapisu), czerwona
 linia w nagłówku, czerwony wiersz w tabeli, dzwonek raz, jeden wpis do logu przy wejściu
 w stan i przy wyjściu. `is_working()` nietknięte — jest na to osobny test regresyjny.
-Testy 158 → 169, e2e 13 → **14 etapów** (nowy etap odtwarza PID 26356: 10 h ciszy →
+
+Recenzja (`code-reviewer`, świeży kontekst, read-only) wyłapała jeden major: pierwsza wersja
+tekstu **twierdziła** „zwykle znaczy to, że czeka, aż coś zatwierdzisz", a program tego nie
+wie — wiszące pytanie o uprawnienia, jedno narzędzie działające godzinami i czekanie na limit
+API dają ten sam rekord `turn.tool_in_flight`, a CPU ich nie rozróżnia (pomiar 2026-09-02).
+Poprawione: komunikat podaje POMIAR i wymienia trzy możliwe przyczyny; dwuznaczność opisana
+w docstringu `Session.stalled` i przypięta dwoma testami, żeby nikt jej później nie „naprawił"
+zgadywaniem po `turn_reason`.
+
+Testy 158 → 171, e2e 13 → **14 etapów** (nowy etap odtwarza PID 26356: 10 h ciszy →
 bramka trzyma **i** ostrzeżenie ląduje w logu).
 
 **Wszystkie wymiary osiągnęły cel.** Jedyny pozostały punkt (podpis kodu .exe) jest
