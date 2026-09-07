@@ -226,7 +226,11 @@ nie dotyka.
 
 - Sesja czekająca na Twoją odpowiedź na pytanie o uprawnienia ma **otwartą turę**,
   więc liczy się jako pracująca i zablokuje wyłączenie. To celowe, ale znaczy tyle,
-  że wisząca zgoda trzyma komputer włączony.
+  że wisząca zgoda trzyma komputer włączony. Od v1.2 program to **mówi**: otwarta tura
+  bez ani jednego zapisu przez 30 minut zapala czerwoną linię w nagłówku
+  (*„Sesje czekające na Ciebie: 1"*), podświetla wiersz, dzwoni raz i zostawia jeden
+  wpis w logu. **Bramka się nie zmienia** — praca naprawdę jest w połowie, więc komputer
+  zostaje włączony. Przestajesz tylko zgadywać, dlaczego.
 - Program nie wie nic o pracy **poza** Claude Code — trwający `git push`, render,
   upload. Do tego służą procesy-strażnicy.
 - Sesja, której proces padł w trakcie `tool_use`, zostawia otwartą turę w transkrypcie.

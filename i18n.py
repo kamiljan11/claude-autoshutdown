@@ -157,6 +157,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "header.conditions_met": "Conditions met - counting down",
         "header.waiting": "Waiting - {reason}",
         "header.more": "  (+{n} more)",
+        # Forma etykiety, nie zdania: liczba w kazdym jezyku ma inna odmiane
+        # czasownika, a "1 session(s) stuck" to tekst dla programisty, nie dla
+        # czlowieka, ktory o 7 rano patrzy, czemu komputer nadal chodzi.
+        "header.stalled": "! Sessions waiting on you: {n} (longest: {d}) - nothing will shut down",
         "btn.arm": "ARM",
         "btn.disarm": "DISARM",
         "btn.lang": "PL",
@@ -300,6 +304,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "log.monitor_error": "Monitor thread error: {error}",
         "log.gui_error": "GUI loop error: {error}",
         "log.waiting": "Waiting because: {blockers}",
+        "log.stalled": "STUCK: session {name} (PID {pid}) has had an open turn with no writes for {d}. This usually means it is waiting for you to approve something. Nothing will shut down until you look at it.",
+        "log.stalled_cleared": "Session {name} (PID {pid}) moved again after {d}",
         "log.all_green": "All conditions green",
         "log.countdown_start": "Conditions met {a}/{b} - starting {s} s countdown",
         "log.countdown_cancelled": "Countdown CANCELLED: {reason}",
@@ -393,6 +399,7 @@ STRINGS: dict[str, dict[str, str]] = {
         "header.conditions_met": "Warunki spelnione - odliczanie",
         "header.waiting": "Czekam - {reason}",
         "header.more": "  (+{n} innych)",
+        "header.stalled": "! Sesje czekajace na Ciebie: {n} (najdluzej: {d}) - nic sie nie wylaczy",
         "btn.arm": "UZBROJ",
         "btn.disarm": "ROZBROJ",
         "btn.lang": "EN",
@@ -528,6 +535,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "log.gui_error": "Blad petli GUI: {error}",
         "log.waiting": "Czekam, bo: {blockers}",
         "log.all_green": "Wszystkie warunki zielone",
+        "log.stalled": "STOI: sesja {name} (PID {pid}) ma otwarta ture i zero zapisow od {d}. Zwykle znaczy to, ze czeka, az cos zatwierdzisz. Nic sie nie wylaczy, dopoki na to nie spojrzysz.",
+        "log.stalled_cleared": "Sesja {name} (PID {pid}) ruszyla po {d}",
         "log.countdown_start": "Warunki spelnione {a}/{b} - start odliczania {s} s",
         "log.countdown_cancelled": "Odliczanie ANULOWANE: {reason}",
         "log.skipped_disarmed": "Akcja pominieta - program jest rozbrojony",

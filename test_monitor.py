@@ -11,6 +11,7 @@ import pytest
 
 from i18n import t
 from monitor import (
+    STALLED_TURN_SECONDS,
     TURN_CLOSED,
     TURN_OPEN,
     TURN_UNKNOWN,
@@ -592,3 +593,55 @@ def test_resolve_language(setting, expected):
 def test_nieznany_klucz_nie_jest_pustym_napisem():
     """Literowka w kluczu ma byc WIDOCZNA (sam klucz), nie cichym pustym labelem."""
     assert t("no.such.key") == "no.such.key"
+
+
+# --------------------------------------------------------------------------- #
+# Session.stalled - sesja stoi z otwarta tura (regresja PID 26356, 2026-09-06)
+# --------------------------------------------------------------------------- #
+def test_stalled_true_for_long_open_turn_without_subagents() -> None:
+    session = make_session(turn=TURN_OPEN, working=True, active_subagents=0,
+                           silence=STALLED_TURN_SECONDS + 1,
+                           turn_reason="turn.processing_tool_result")
+    assert session.stalled is True
+
+
+def test_stalled_false_just_below_threshold() -> None:
+    session = make_session(turn=TURN_OPEN, working=True, active_subagents=0,
+                           silence=STALLED_TURN_SECONDS - 1)
+    assert session.stalled is False
+
+
+def test_stalled_false_when_subagents_still_write() -> None:
+    """Subagent pisze -> plik sesji stoi, ale praca TRWA. To nie jest zawieszenie."""
+    session = make_session(turn=TURN_OPEN, working=True, active_subagents=3,
+                           silence=STALLED_TURN_SECONDS * 10)
+    assert session.stalled is False
+
+
+def test_stalled_false_for_closed_turn() -> None:
+    """Domknieta tura po godzinach ciszy to sesja SKONCZONA, nie zawieszona."""
+    session = make_session(turn=TURN_CLOSED, working=False, silence=86400.0)
+    assert session.stalled is False
+
+
+def test_stalled_false_for_unknown_turn() -> None:
+    """UNKNOWN blokuje wylaczenie, ale nie wolno go zglaszac jako 'czeka na Ciebie'."""
+    session = make_session(turn=TURN_UNKNOWN, working=True, silence=86400.0)
+    assert session.stalled is False
+
+
+def test_stalled_does_not_change_the_shutdown_gate() -> None:
+    """Kluczowa asercja: ostrzezenie jest DODATKIEM, nie osłabieniem bramki.
+
+    Sesja stojaca 10 h z otwarta tura ma dalej wychodzic jako pracujaca - dokladnie
+    tak, jak zachowal sie program przy PID 26356.
+    """
+    assert is_working(turn=TURN_OPEN, silence=36000.0, quiet_seconds=300.0,
+                      active_subagents=0) is True
+
+
+def test_stalled_session_why_shows_duration() -> None:
+    session = make_session(turn=TURN_OPEN, working=True,
+                           silence=STALLED_TURN_SECONDS + 60,
+                           turn_reason="turn.processing_tool_result")
+    assert fmt_duration(session.silence) in session.why

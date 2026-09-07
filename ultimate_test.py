@@ -329,6 +329,73 @@ def gui_chain(env: FakeEnvironment) -> bool:
             proc.kill()
 
 
+def stalled_chain(env: FakeEnvironment) -> bool:
+    """Odtwarza PID 26356: tura otwarta, plik nie rusza sie od 10 h.
+
+    Program ma zrobic DWIE rzeczy naraz: nie wylaczyc komputera (praca przerwana
+    w polowie) i napisac czlowiekowi, ze to na NIEGO sie czeka. Wczesniej robil
+    tylko to pierwsze - stad 9 h 53 min zagadki przy porannym powrocie.
+    """
+    home = env.root / "app-home-stalled"
+    home.mkdir(exist_ok=True)
+    config = {
+        "poll_seconds": 2, "quiet_seconds": 60, "required_polls": 2,
+        "countdown_seconds": 3, "action": "nothing", "dry_run": False,
+        "require_human_idle": False, "human_idle_required": 600,
+        "allow_zero_sessions": False, "guard_patterns": [], "language": "en",
+    }
+    (home / "config.json").write_text(json.dumps(config), encoding="utf-8")
+
+    sid = "dddddddd-0000-0000-0000-00000000000d"
+    pid = env.spawn_session("test-stalled", sid)
+    env.write_transcript(sid, [ASSISTANT_TOOL], age_seconds=36_000)  # 10 h ciszy
+    # Cisza to now - max(mtime, startedAt), wiec sam stary transkrypt nie wystarczy:
+    # bez cofniecia startu sesji zmierzylaby sie godzina zamiast dziesieciu.
+    # `procStart` zostaje prawdziwy - to on chroni przed recyklingiem PID.
+    meta_path = env.claude / "sessions" / f"{pid}.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["startedAt"] = int((time.time() - 36_000) * 1000)
+    meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+    proc = subprocess.Popen(
+        [sys.executable, "-X", "utf8", str(APP_DIR / "autoshutdown.py")],
+        env={**os.environ,
+             "CLAUDE_CONFIG_DIR": str(env.claude),
+             "CLAUDE_AUTOSHUTDOWN_HOME": str(home),
+             "CLAUDE_AUTOSHUTDOWN_AUTOARM": "1"},
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        say("  sesja z tura otwarta od 10 h - czekam 10 s")
+        log_path = home / "autoshutdown.log"
+        deadline = time.time() + 20
+        seen = ""
+        while time.time() < deadline:
+            # Log powstaje dopiero, gdy GUI wstanie - brak pliku to jeszcze nie porazka.
+            seen = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
+            if "STUCK:" in seen:
+                break
+            time.sleep(1)
+        if "ACTION EXECUTED" in seen or "countdown" in seen:
+            say("  OBLANY program wylaczylby komputer mimo przerwanej pracy")
+            return False
+        if "STUCK:" not in seen:
+            say("  OBLANY brak ostrzezenia o zawieszonej sesji w logu")
+            for line in seen.splitlines():
+                say(f"          | {line}")
+            return False
+        for line in seen.splitlines():
+            if "STUCK:" in line:
+                say(f"          | {line}")
+        say("  ZDANY  bramka trzyma I ostrzezenie poszlo do logu")
+        return True
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
 def main() -> int:
     say("=" * 78)
     say("TEST KONCOWY Claude AutoShutdown")
@@ -344,6 +411,9 @@ def main() -> int:
         say("=" * 78)
         say("ETAP 12: GUI end-to-end (tryb bojowy, akcja 'nothing')")
         results.append(gui_chain(env))
+        say("=" * 78)
+        say("ETAP 14: sesja zawieszona 10 h (regresja PID 26356)")
+        results.append(stalled_chain(env))
     finally:
         env.cleanup()
 

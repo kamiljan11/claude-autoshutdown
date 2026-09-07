@@ -14,6 +14,7 @@ Bezpieczniki, zeby wylaczenie nigdy nie bylo przypadkowe:
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import json
 import os
@@ -488,6 +489,9 @@ class ClaudeAutoShutdown:
         self.last_snapshot = time.time()
         self.last_cancel = 0.0
         self.last_blockers: list[str] = []
+        # session_id -> cisza w chwili, gdy sesja przekroczyla prog zawieszenia.
+        # Sluzy do zalogowania KRAWEDZI (wejscie/wyjscie), nie stanu co cykl.
+        self.stalled_seen: dict[str, float] = {}
         self.last_scan_error = ""
         self._preview_rendered: tuple[str, float] | None = None
         self._restoring_selection = False
@@ -606,6 +610,10 @@ class ClaudeAutoShutdown:
         self.verdict_label = tk.Label(left, text=t("header.starting"), bg=BG_PANEL,
                                       fg=FG_DIM, font=("Segoe UI", 10))
         self.verdict_label.pack(anchor="w", pady=(2, 0), fill="x")
+        # Osobna linia, nie mieszana z werdyktem: zawieszona sesja to sprawa dla
+        # czlowieka, a werdykt mowi tylko, czy wolno wylaczyc. Ukryta, gdy czysto.
+        self.stalled_label = tk.Label(left, text="", bg=BG_PANEL, fg=BAD_COLOR,
+                                      font=("Segoe UI", 10, "bold"))
 
     def _build_body(self) -> None:
         body = tk.Frame(self.root, bg=BG)
@@ -671,6 +679,7 @@ class ClaudeAutoShutdown:
                              anchor="w", stretch=False)
         self.tree.tag_configure("working", foreground="#ffd479")
         self.tree.tag_configure("idle", foreground=OK_COLOR)
+        self.tree.tag_configure("stalled", foreground=BAD_COLOR)
         xscroll = ttk.Scrollbar(wrap, orient="horizontal", command=self.tree.xview)
         self.tree.configure(xscrollcommand=xscroll.set)
         self.tree.pack(fill="x")
@@ -1133,6 +1142,7 @@ class ClaudeAutoShutdown:
     # --- rendering ---------------------------------------------------------
     def _render_all(self) -> None:
         self._render_header()
+        self._render_stalled()
         self._render_tree()
         self._render_checks()
         self._render_combo()
@@ -1179,7 +1189,8 @@ class ClaudeAutoShutdown:
                         f"{session.short_cwd}  ({session.surface})", session.why,
                         fmt_duration(session.silence), f"{session.cpu_percent:.1f}%",
                         subs, session.pid),
-                tags=("working" if session.working else "idle",))
+                tags=("stalled" if session.stalled
+                      else "working" if session.working else "idle",))
         # Odtworzenie zaznaczenia odpala <<TreeviewSelect>>, ktory cofalby co cykl
         # wybor sesji zrobiony recznie w Podgladzie. Flaga wycisza handler.
         self._restoring_selection = True
@@ -1189,6 +1200,42 @@ class ClaudeAutoShutdown:
                     self.tree.selection_add(iid)
         finally:
             self._restoring_selection = False
+
+    def _render_stalled(self) -> None:
+        """Pasek + wpisy do logu dla sesji, ktore stoja z otwarta tura.
+
+        Powod istnienia (2026-09-06): sesja PID 26356 blokowala wylaczenie przez
+        9 h 53 min, bo czekala na zatwierdzenie w oknie uprawnien. Program
+        zachowal sie POPRAWNIE - praca byla przerwana w polowie, wiec komputer
+        musial zostac wlaczony. Brakowalo tylko tego, zeby powiedziec czlowiekowi,
+        ze czeka sie na NIEGO, a nie na agenta. Bramka zostaje bez zmian.
+        """
+        stalled = [s for s in self.sessions if s.stalled]
+        current = {s.session_id: s.silence for s in stalled}
+
+        for session in stalled:
+            if session.session_id not in self.stalled_seen:
+                self._append_log(log_line(t("log.stalled", name=session.name,
+                                            pid=session.pid,
+                                            d=fmt_duration(session.silence))))
+                with contextlib.suppress(tk.TclError):
+                    self.root.bell()
+        for session_id, silence in self.stalled_seen.items():
+            if session_id in current:
+                continue
+            session = next((s for s in self.sessions if s.session_id == session_id), None)
+            if session is None:   # sesja zniknela (zamknieta) - nie ma o czym pisac
+                continue
+            self._append_log(log_line(t("log.stalled_cleared", name=session.name,
+                                        pid=session.pid, d=fmt_duration(silence))))
+        self.stalled_seen = current
+
+        if stalled:
+            self.stalled_label.config(text=t("header.stalled", n=len(stalled),
+                                             d=fmt_duration(max(current.values()))))
+            self.stalled_label.pack(anchor="w", pady=(2, 0), fill="x")
+        else:
+            self.stalled_label.pack_forget()
 
     def _render_checks(self) -> None:
         for child in self.checks_frame.winfo_children():
