@@ -119,7 +119,16 @@ class Session:
 
         Celowo NIE wplywa na `is_working` ani na werdykt - sesja w tym stanie
         dalej blokuje wylaczenie, bo jej praca jest przerwana w polowie. Sluzy
-        wylacznie do tego, zeby czlowiek zobaczyl, ze cos czeka wlasnie na niego.
+        wylacznie do tego, zeby czlowiek zajrzal do sesji.
+
+        DWUZNACZNOSC, ktorej NIE DA SIE tu rozstrzygnac: pytanie o uprawnienia
+        czekajace na czlowieka, jedno narzedzie dzialajace ponad pol godziny
+        (build, deploy) i czekanie na limit API zapisuja w transkrypcie ten sam
+        rekord - `assistant` ze `stop_reason: tool_use`, czyli
+        `turn.tool_in_flight`. Rozroznienia nie ma tez w CPU (pomiar 2026-09-02:
+        rozklady sesji bezczynnej i pracujacej sie pokrywaja). Dlatego komunikat
+        w GUI i w logu podaje POMIAR ("nic nie zapisala od X") i wymienia
+        mozliwe przyczyny, zamiast twierdzic ktorakolwiek z nich.
         """
         return (self.turn == TURN_OPEN
                 and self.active_subagents == 0

@@ -333,8 +333,12 @@ def stalled_chain(env: FakeEnvironment) -> bool:
     """Odtwarza PID 26356: tura otwarta, plik nie rusza sie od 10 h.
 
     Program ma zrobic DWIE rzeczy naraz: nie wylaczyc komputera (praca przerwana
-    w polowie) i napisac czlowiekowi, ze to na NIEGO sie czeka. Wczesniej robil
-    tylko to pierwsze - stad 9 h 53 min zagadki przy porannym powrocie.
+    w polowie) i napisac czlowiekowi, ze sesja stoi. Wczesniej robil tylko to
+    pierwsze - stad 9 h 53 min zagadki przy porannym powrocie.
+
+    Etap sprawdza, ze OSTRZEZENIE PADA - nie, ze przyczyna to wiszaca zgoda.
+    Tego rozroznienia nie da sie zrobic z transkryptu (patrz `Session.stalled`),
+    wiec i tekst, i ten test mowia o pomiarze, nie o diagnozie.
     """
     home = env.root / "app-home-stalled"
     home.mkdir(exist_ok=True)

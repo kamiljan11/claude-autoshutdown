@@ -268,9 +268,12 @@ the machine down mid-run.
 - A session waiting for **your** answer to a permission prompt has an open turn, so it blocks
   shutdown. Intentional — but a pending approval keeps the machine on. The program
   now says so out loud: an open turn with no transcript writes for 30 minutes puts a red line in
-  the header (*"Sessions waiting on you: 1"*), colours the row, rings the bell once and writes
-  one entry to the log. **The gate itself is unchanged** — the work really is half-finished, so
-  the machine stays on. You just no longer have to guess why.
+  the header, colours the row, rings the bell once and writes one entry to the log.
+  The message reports the **measurement** ("wrote nothing for 9h 57m"), not a diagnosis: a
+  pending permission prompt, one tool call that legitimately runs for hours and a wait on an
+  API rate limit all write the same record, so the program names all three instead of picking
+  one. **The gate itself is unchanged** — the work really is half-finished, so the machine
+  stays on. You just no longer have to guess that something is stuck.
 - A turn interrupted with `Esc` mid-tool-call stays OPEN in the transcript. The monitor shows how
   long it has been blocking, but does not guess that it was abandoned.
 - The program knows nothing about work **outside** Claude Code: a running `git push`, a render, an

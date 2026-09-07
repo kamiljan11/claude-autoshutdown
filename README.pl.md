@@ -227,10 +227,13 @@ nie dotyka.
 - Sesja czekająca na Twoją odpowiedź na pytanie o uprawnienia ma **otwartą turę**,
   więc liczy się jako pracująca i zablokuje wyłączenie. To celowe, ale znaczy tyle,
   że wisząca zgoda trzyma komputer włączony. Program to teraz **mówi**: otwarta tura
-  bez ani jednego zapisu przez 30 minut zapala czerwoną linię w nagłówku
-  (*„Sesje czekające na Ciebie: 1"*), podświetla wiersz, dzwoni raz i zostawia jeden
-  wpis w logu. **Bramka się nie zmienia** — praca naprawdę jest w połowie, więc komputer
-  zostaje włączony. Przestajesz tylko zgadywać, dlaczego.
+  bez ani jednego zapisu przez 30 minut zapala czerwoną linię w nagłówku, podświetla
+  wiersz, dzwoni raz i zostawia jeden wpis w logu. Komunikat podaje **pomiar** („nic nie
+  zapisała od 9h 57m"), nie diagnozę: wiszące pytanie o uprawnienia, jedno narzędzie
+  działające godzinami i czekanie na limit API zapisują ten sam rekord, więc program
+  wymienia wszystkie trzy zamiast wybierać jedną. **Bramka się nie zmienia** — praca
+  naprawdę jest w połowie, więc komputer zostaje włączony. Przestajesz tylko zgadywać,
+  że coś stoi.
 - Program nie wie nic o pracy **poza** Claude Code — trwający `git push`, render,
   upload. Do tego służą procesy-strażnicy.
 - Sesja, której proces padł w trakcie `tool_use`, zostawia otwartą turę w transkrypcie.

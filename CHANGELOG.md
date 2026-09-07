@@ -10,6 +10,10 @@ this file starts at the point it was introduced, so earlier history lives in the
   30 minutes now shows a red line in the header, colours the row, rings the bell once and
   writes one log entry on entry and on exit. Prompted by a real session that held the machine
   on for 9h53m because it was waiting for a permission prompt to be approved.
+  The wording reports the measurement rather than a cause: a pending prompt, a genuinely
+  long-running tool call and a wait on an API rate limit are indistinguishable in the
+  transcript, so all three are named. `test_dlugie_narzedzie_wyglada_tak_samo_jak_wiszaca_zgoda`
+  pins that ambiguity so nobody later "fixes" it by guessing from `turn_reason`.
 - 14th end-to-end stage reproducing that session: 10 hours of silence must produce both a held
   gate and the warning.
 

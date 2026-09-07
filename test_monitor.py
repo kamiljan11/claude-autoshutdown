@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from i18n import t
+from i18n import set_language, t
 from monitor import (
     STALLED_TURN_SECONDS,
     TURN_CLOSED,
@@ -645,3 +645,30 @@ def test_stalled_session_why_shows_duration() -> None:
                            silence=STALLED_TURN_SECONDS + 60,
                            turn_reason="turn.processing_tool_result")
     assert fmt_duration(session.silence) in session.why
+
+
+def test_dlugie_narzedzie_wyglada_tak_samo_jak_wiszaca_zgoda() -> None:
+    """Swiadomie utrwalona DWUZNACZNOSC, a nie przeoczenie.
+
+    Build trwajacy 40 minut i pytanie o uprawnienia czekajace na czlowieka daja
+    w transkrypcie ten sam rekord (`turn.tool_in_flight`), wiec oba zapalaja
+    ostrzezenie. Test pilnuje, ze nikt nie "naprawi" tego przez zgadywanie
+    przyczyny po `turn_reason` - bo z tego pola przyczyny wyczytac sie nie da.
+    """
+    build = make_session(turn=TURN_OPEN, working=True, active_subagents=0,
+                         silence=2400.0, turn_reason="turn.tool_in_flight")
+    permission = make_session(turn=TURN_OPEN, working=True, active_subagents=0,
+                              silence=35_580.0, turn_reason="turn.tool_in_flight")
+    assert build.stalled is True
+    assert permission.stalled is True
+
+
+def test_komunikat_nie_twierdzi_jednej_przyczyny() -> None:
+    """Skoro sygnal jest dwuznaczny, tekst nie moze brzmiec jak diagnoza."""
+    for lang in ("en", "pl"):
+        set_language(lang)
+        text = t("log.stalled", name="s", pid=1, d="9h 57m").lower()
+        # musi nazwac obie pozostale mozliwosci, nie tylko zgode
+        assert "rate limit" in text or "limit api" in text
+        assert "tool" in text or "narzedzie" in text
+    set_language("en")
