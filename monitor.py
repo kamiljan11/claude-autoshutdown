@@ -35,6 +35,13 @@ SUBAGENT_LIST_LIMIT = 20        # ile subagentow pokazujemy w Podgladzie per ses
 # dziesiatki procent dla spiacego procesu -> sesja na zawsze "PRACUJE").
 MIN_CPU_SAMPLE_SECONDS = 1.0
 
+# Otwarta tura bez ANI JEDNEGO zapisu przez tyle sekund = sesja stoi. Zmierzone
+# 2026-09-06 na sesji PID 26356: tura otwarta na `tool_use`, po czym 10 h 03 min
+# ciszy, a wynik narzedzia i realny zapis pliku dopiero po powrocie czlowieka -
+# sesja czekala na zgode w oknie uprawnien. To NIE jest powod, zeby wylaczyc
+# komputer (praca byla w polowie), ale JEST powod, zeby to krzyknac na ekranie.
+STALLED_TURN_SECONDS = 1800.0
+
 # O stanie tury decyduja WYLACZNIE rekordy rozmowy. Cala reszta to szum techniczny.
 #
 # Swiadomie jest to lista DOZWOLONYCH, nie lista szumu: w zywych transkryptach na tej
@@ -96,7 +103,7 @@ class Session:
             # Przerwana tura (np. Esc w trakcie narzedzia) zostaje OPEN na zawsze
             # i blokuje wylaczenie. Nie zgadujemy za uzytkownika - pokazujemy,
             # jak dlugo to trwa, zeby sam zobaczyl porzucona sesje.
-            if self.silence > 3600:
+            if self.stalled:
                 return t("why.blocking_since", reason=self.turn_text,
                          duration=fmt_duration(self.silence))
             return self.turn_text
@@ -105,6 +112,27 @@ class Session:
         if self.turn == TURN_UNKNOWN:
             return t("why.unknown_turn", reason=self.turn_text)
         return t("why.fresh_write")
+
+    @property
+    def stalled(self) -> bool:
+        """Tura otwarta, subagenci milcza, plik nie rosnie od pol godziny.
+
+        Celowo NIE wplywa na `is_working` ani na werdykt - sesja w tym stanie
+        dalej blokuje wylaczenie, bo jej praca jest przerwana w polowie. Sluzy
+        wylacznie do tego, zeby czlowiek zajrzal do sesji.
+
+        DWUZNACZNOSC, ktorej NIE DA SIE tu rozstrzygnac: pytanie o uprawnienia
+        czekajace na czlowieka, jedno narzedzie dzialajace ponad pol godziny
+        (build, deploy) i czekanie na limit API zapisuja w transkrypcie ten sam
+        rekord - `assistant` ze `stop_reason: tool_use`, czyli
+        `turn.tool_in_flight`. Rozroznienia nie ma tez w CPU (pomiar 2026-09-02:
+        rozklady sesji bezczynnej i pracujacej sie pokrywaja). Dlatego komunikat
+        w GUI i w logu podaje POMIAR ("nic nie zapisala od X") i wymienia
+        mozliwe przyczyny, zamiast twierdzic ktorakolwiek z nich.
+        """
+        return (self.turn == TURN_OPEN
+                and self.active_subagents == 0
+                and self.silence >= STALLED_TURN_SECONDS)
 
     @property
     def short_cwd(self) -> str:

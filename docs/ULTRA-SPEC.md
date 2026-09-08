@@ -10,7 +10,7 @@ Skala: 0 = brak, 5 = działa, 10 = poziom komercyjny (benchmark: narzędzia klas
 |---|---|---|---|---|---|
 | Decyzja "skończone" (nigdy fałszywie) | 3 | 9 | 9 | 9 | sesje CLI **zweryfikowane** 2026-09-06: `claude -p` z npm zapisał `sessions/<pid>.json` po 8 s |
 | Nigdy nie wyłączy za wcześnie (bramki) | 3 | 9 | 9 | 9 | — |
-| Wyłączy, gdy powinien (nie wisi wiecznie) | 3 | 7 | 8 | 8 | mtime z przyszłości teraz widoczny w logu; Esc-OPEN nadal celowo blokuje |
+| Wyłączy, gdy powinien (nie wisi wiecznie) | 3 | 7 | 8 | 8 | mtime z przyszłości widoczny w logu; Esc-OPEN i wisząca zgoda nadal celowo blokują, ale od 2026-09-07 **krzyczą** o tym w nagłówku i w logu |
 | Odporność konfiguracji (zły plik nie wywraca) | 2 | 5 | 8 | 8 | walidacja + zakresy + atomowy zapis + ostrzeżenia w logu |
 | Awaria widoczna (nic nie ginie po cichu) | 3 | 6 | 9 | 9 | crash.log + dialog, guard-scan fails closed, timeout = porażka |
 | Podgląd (widać, co agent robi) | 1 | 5 | 8 | 8 | subagenci w Podglądzie jako wpisy pod sesją (najświeżsi pierwsi, max 20) |
@@ -38,6 +38,29 @@ na spacji w ścieżce repo — blokował workflow-lint na każdym koncie z folde
 zawierającym spację) oraz w CI (`$home` to zmienna tylko-do-odczytu w PowerShell).
 
 Testy 155 → 158, PR #3 zmergowany, `main` = `7633984`.
+
+**Cykl 2026-09-07 (runda 3 — obserwacja z produkcji):** Kamil zobaczył sesję
+`claude-code-19` (PID 26356) blokującą wyłączenie od 9 h 53 min przy 0 % CPU i zgłosił
+hipotezę „realnie nic nie działało". Śledztwo ją **obaliło**: tura otwarta na `tool_use`
+o 23:13:00, przerwa 10 h 03 min, a wynik narzędzia **i realny zapis pliku**
+`scheduled-tasks/pg-reviewer-calibration/SKILL.md` dopiero o 09:16:21 — sesja czekała na
+zgodę człowieka, praca była w połowie. Bramka zachowała się poprawnie i **została bez
+zmian**. Brakowało jednego: powiedzieć wprost, że czeka się na CZŁOWIEKA, nie na agenta.
+
+Wdrożone: `Session.stalled` (tura OPEN + zero subagentów + 30 min bez zapisu), czerwona
+linia w nagłówku, czerwony wiersz w tabeli, dzwonek raz, jeden wpis do logu przy wejściu
+w stan i przy wyjściu. `is_working()` nietknięte — jest na to osobny test regresyjny.
+
+Recenzja (`code-reviewer`, świeży kontekst, read-only) wyłapała jeden major: pierwsza wersja
+tekstu **twierdziła** „zwykle znaczy to, że czeka, aż coś zatwierdzisz", a program tego nie
+wie — wiszące pytanie o uprawnienia, jedno narzędzie działające godzinami i czekanie na limit
+API dają ten sam rekord `turn.tool_in_flight`, a CPU ich nie rozróżnia (pomiar 2026-09-02).
+Poprawione: komunikat podaje POMIAR i wymienia trzy możliwe przyczyny; dwuznaczność opisana
+w docstringu `Session.stalled` i przypięta dwoma testami, żeby nikt jej później nie „naprawił"
+zgadywaniem po `turn_reason`.
+
+Testy 158 → 171, e2e 13 → **14 etapów** (nowy etap odtwarza PID 26356: 10 h ciszy →
+bramka trzyma **i** ostrzeżenie ląduje w logu).
 
 **Wszystkie wymiary osiągnęły cel.** Jedyny pozostały punkt (podpis kodu .exe) jest
 decyzją finansową Kamila, nie techniczną — nazwany w README jako znane ograniczenie,

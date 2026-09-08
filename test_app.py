@@ -154,3 +154,93 @@ def test_arm_on_start_domyslnie_wylaczone(app):
 def test_arm_on_start_da_sie_wlaczyc(app):
     app.CONFIG_PATH.write_text('{"arm_on_start": true}', encoding="utf-8")
     assert app.load_config()["arm_on_start"] is True
+
+
+# --------------------------------------------------------------------------- #
+# ostrzezenie o zawieszonej sesji (regresja PID 26356, 2026-09-06)
+# --------------------------------------------------------------------------- #
+class _FakeLabel:
+    def __init__(self) -> None:
+        self.text = ""
+        self.packed = False
+
+    def config(self, **kw) -> None:
+        self.text = kw.get("text", self.text)
+
+    def pack(self, **_kw) -> None:
+        self.packed = True
+
+    def pack_forget(self) -> None:
+        self.packed = False
+
+
+class _FakeRoot:
+    def __init__(self) -> None:
+        self.bells = 0
+
+    def bell(self) -> None:
+        self.bells += 1
+
+
+def _gui(app, sessions):
+    """ClaudeAutoShutdown bez Tk - tylko to, czego dotyka _render_stalled."""
+    gui = object.__new__(app.ClaudeAutoShutdown)
+    gui.sessions = sessions
+    gui.stalled_seen = {}
+    gui.stalled_label = _FakeLabel()
+    gui.root = _FakeRoot()
+    logged: list[str] = []
+    gui.logged = logged
+    gui._append_log = logged.append
+    return gui
+
+
+class _Stub:
+    """Minimalna sesja: _render_stalled czyta tylko te pola."""
+
+    def __init__(self, session_id: str, stalled: bool, silence: float) -> None:
+        self.session_id = session_id
+        self.stalled = stalled
+        self.silence = silence
+        self.name = "claude-code-19"
+        self.pid = 26356
+
+
+def test_zawieszona_sesja_loguje_sie_raz(app):
+    gui = _gui(app, [_Stub("s1", True, 35520.0)])
+    gui._render_stalled()
+    gui._render_stalled()
+    gui._render_stalled()
+    assert len(gui.logged) == 1
+    assert "26356" in gui.logged[0]
+    assert gui.stalled_label.packed is True
+    assert gui.root.bells == 1
+
+
+def test_ruszyla_ponownie_loguje_koniec_i_chowa_pasek(app):
+    session = _Stub("s1", True, 35520.0)
+    gui = _gui(app, [session])
+    gui._render_stalled()
+    session.stalled = False
+    session.silence = 2.0
+    gui._render_stalled()
+    assert len(gui.logged) == 2
+    assert gui.stalled_seen == {}
+    assert gui.stalled_label.packed is False
+
+
+def test_zamknieta_sesja_nie_generuje_wpisu_o_wznowieniu(app):
+    """Sesja znika z listy (zamknieta) - to nie jest 'ruszyla', tylko koniec."""
+    gui = _gui(app, [_Stub("s1", True, 35520.0)])
+    gui._render_stalled()
+    gui.sessions = []
+    gui._render_stalled()
+    assert len(gui.logged) == 1
+    assert gui.stalled_seen == {}
+
+
+def test_brak_zawieszonych_nie_pokazuje_paska(app):
+    gui = _gui(app, [_Stub("s1", False, 10.0)])
+    gui._render_stalled()
+    assert gui.logged == []
+    assert gui.stalled_label.packed is False
