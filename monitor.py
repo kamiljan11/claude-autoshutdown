@@ -2,7 +2,8 @@
 
 Zrodlo prawdy (zweryfikowane na tej maszynie, nie zgadywane):
   ~/.claude/sessions/<PID>.json               - rejestr sesji: pid, sessionId, cwd,
-                                                procStart (FILETIME), entrypoint, name
+                                                procStart (FILETIME / tyki na Linuksie),
+                                                entrypoint, name
   ~/.claude/projects/<slug>/<sessionId>.jsonl - transkrypt; mtime rosnie przy kazdym
                                                 zapisie modelu/narzedzia
   ~/.claude/projects/<slug>/<sessionId>/subagents/*.jsonl - rownolegli subagenci
@@ -18,17 +19,22 @@ import fnmatch
 import json
 import os
 import re
-import subprocess
-import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from i18n import t
-from winprobe import FILETIME_PER_SECOND, ProcInfo, probe_process
+from probe import (
+    FILETIME_PER_SECOND,
+    PROC_START_UNITS_PER_SECOND,
+    ProcInfo,
+    claude_code_pids,
+    probe_process,
+    process_names,
+)
 
 # Tolerancja porownania czasu startu procesu (1 s) - chroni przed recyklingiem PID.
-PROC_START_TOLERANCE = FILETIME_PER_SECOND
+PROC_START_TOLERANCE = PROC_START_UNITS_PER_SECOND
 SUBAGENT_ACTIVE_WINDOW = 120.0  # subagent "swiezy" gdy pisal w ostatnich 2 min
 SUBAGENT_LIST_LIMIT = 20        # ile subagentow pokazujemy w Podgladzie per sesja
 # Ponizej tego odstepu pomiar %CPU jest smieciem (dzielenie przez mala liczbe daje
@@ -269,7 +275,9 @@ class SessionScanner:
 
     def _is_live_claude(self, meta: dict, proc: ProcInfo) -> bool:
         """Czy wpis opisuje NAPRAWDE ten proces (a nie martwy plik / obcy PID)."""
-        if not proc.alive or "claude" not in proc.name.lower():
+        # Pelna sciezka, nie sama nazwa: natywny CLI na Linuksie to
+        # ~/.local/share/claude/versions/<wersja> - plik nazywa sie "2.1.283".
+        if not proc.alive or "claude" not in proc.exe.lower():
             return False
         declared = meta.get("procStart")
         if not declared:
@@ -599,37 +607,7 @@ def claude_processes_without_registry(known_pids: set[int]) -> list[int]:
     niewidzialna dla monitora. Tu patrzymy na system operacyjny zamiast wierzyc
     plikom - rozbieznosc lepiej zglosic niz zignorowac.
     """
-    if sys.platform != "win32":
-        return []
-    try:
-        out = subprocess.run(
-            ["tasklist", "/fi", "IMAGENAME eq claude.exe", "/fo", "csv", "/nh"],
-            capture_output=True, text=True, timeout=15, check=False,
-            encoding="utf-8", errors="replace",
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return []
-    found: list[int] = []
-    for line in out.splitlines():
-        parts = [p.strip('"') for p in line.split('","')]
-        if len(parts) < 2 or not parts[0].lower().startswith("claude"):
-            continue
-        try:
-            pid = int(parts[1])
-        except ValueError:
-            continue
-        if pid in known_pids:
-            continue
-        # Sama nazwa claude.exe nie wystarczy: aplikacja desktopowa uruchamia
-        # kilkanascie procesow pomocniczych (renderer, gpu, crashpad) o tej samej
-        # nazwie. Sesja Claude Code to binarka spod claude-code\<wersja>\ i tylko
-        # jej brak w rejestrze jest podejrzany. Zmierzone: 26 procesow claude.exe,
-        # z czego sesji 6 - bez tego filtra kazdy cykl krzyczalby falszywym alarmem.
-        exe = probe_process(pid).exe.lower().replace("/", "\\")
-        if "claude-code\\" in exe:
-            found.append(pid)
-    return sorted(found)
+    return [pid for pid in claude_code_pids() if pid not in known_pids]
 
 
 def fmt_duration(seconds: float) -> str:
@@ -652,21 +630,9 @@ def matching_guard_processes(patterns: list[str]) -> list[str] | None:
     """
     if not patterns:
         return []
-    if sys.platform != "win32":
+    names = process_names()
+    if names is None:
         return None
-    try:
-        out = subprocess.run(
-            ["tasklist", "/fo", "csv", "/nh"],
-            capture_output=True, text=True, timeout=15, check=False,
-            encoding="utf-8", errors="replace",  # akcentowana nazwa procesu != crash
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    names = {line.split('","')[0].lstrip('"').lower()
-             for line in out.splitlines() if line.strip()}
-    if not names:
-        return None  # tasklist odpowiedzial pustka - to awaria, nie "czysto"
     return sorted({name for name in names
                    if any(_pattern_matches(p, name) for p in patterns)})
 

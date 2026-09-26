@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from monitor import SessionScanner, evaluate, fmt_duration
-from winprobe import probe_process
+from probe import probe_process
 
 APP_DIR = Path(__file__).resolve().parent
 REPORT = APP_DIR / "ultimate_test_report.log"

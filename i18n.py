@@ -17,7 +17,7 @@ _current = DEFAULT_LANGUAGE
 
 
 def system_language() -> str:
-    """Dwuliterowy kod jezyka interfejsu Windows (np. 'en', 'pl'), 'en' gdy nieznany.
+    """Dwuliterowy kod jezyka interfejsu (np. 'en', 'pl'), 'en' gdy nieznany.
 
     Na Windows pytamy o jezyk UI uzytkownika, nie o locale procesu Pythona - to
     pierwsze jest tym, co uzytkownik faktycznie widzi w systemie.
@@ -142,6 +142,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "priv.not_assigned": "account lacks the shutdown privilege (ERROR_NOT_ALL_ASSIGNED)",
         "priv.adjust_error": "AdjustTokenPrivileges error {code}",
         "priv.non_windows": "not Windows",
+        "priv.unsupported": "unsupported operating system",
+        "priv.logind_yes": "logind {method} = yes - action available",
+        "priv.logind_no": "logind {method} = {answer} - this system does not support it",
+        "priv.logind_challenge": "logind {method} = challenge - needs a password nobody will type at night",
+        "priv.not_needed": "no special permission needed",
+        "priv.logind_unknown": "logind did not answer {method} (busctl missing or no D-Bus)",
+        "power.skipped_unsupported": "{label} - skipped (unsupported operating system)",
         # --- header ---------------------------------------------------------------
         "app.title": "Claude AutoShutdown",
         "header.armed": "● ARMED",
@@ -379,6 +386,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "priv.not_assigned": "konto nie ma przywileju wylaczania (ERROR_NOT_ALL_ASSIGNED)",
         "priv.adjust_error": "AdjustTokenPrivileges blad {code}",
         "priv.non_windows": "nie-Windows",
+        "priv.unsupported": "nieobslugiwany system operacyjny",
+        "priv.logind_yes": "logind {method} = yes - akcja dostepna",
+        "priv.logind_no": "logind {method} = {answer} - system tego nie obsluguje",
+        "priv.logind_challenge": "logind {method} = challenge - wymaga hasla, ktorego w nocy nikt nie wpisze",
+        "priv.not_needed": "nie wymaga specjalnych uprawnien",
+        "priv.logind_unknown": "logind nie odpowiedzial na {method} (brak busctl albo D-Bus)",
+        "power.skipped_unsupported": "{label} - pominieto (nieobslugiwany system)",
         "app.title": "Claude AutoShutdown",
         "header.armed": "● UZBROJONY",
         "header.disarmed": "● ROZBROJONY",

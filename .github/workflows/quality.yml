@@ -22,6 +22,26 @@ jobs:
       - name: End-to-end run on a synthetic environment
         run: python ultimate_test.py
 
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09  # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.14"
+      - name: Install test tooling
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+          python -m pip install --upgrade pip pytest ruff
+      - name: Lint
+        run: python -m ruff check .
+      - name: Unit tests
+        run: python -m pytest -q
+      - name: End-to-end run on a synthetic environment (GUI under Xvfb)
+        run: xvfb-run -a python ultimate_test.py
+      - name: Installer syntax
+        run: bash -n install-linux.sh
+
   build-exe:
     needs: test
     runs-on: windows-latest

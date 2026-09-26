@@ -26,6 +26,8 @@ IS_WINDOWS = sys.platform == "win32"
 # --- stale WinAPI -----------------------------------------------------------
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 FILETIME_PER_SECOND = 10_000_000  # FILETIME tyka co 100 ns
+# procStart w rejestrze sesji to na Windows FILETIME - ta sama jednostka.
+PROC_START_UNITS_PER_SECOND = FILETIME_PER_SECOND
 
 if IS_WINDOWS:
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -234,13 +236,15 @@ _TOKEN_ADJUST_PRIVILEGES = 0x20
 _TOKEN_QUERY = 0x8
 
 
-def shutdown_capability() -> tuple[bool, str]:
+def shutdown_capability(action: str = "shutdown") -> tuple[bool, str]:
     """Czy proces MOZE wylaczyc komputer. Probuje wlaczyc SeShutdownPrivilege.
 
     To dokladnie ten przywilej, ktorego wymaga ExitWindowsEx / shutdown.exe.
     Wlaczenie przywileju w wlasnym tokenie NIE inicjuje zadnego zamkniecia,
-    wiec sprawdzenie mozna robic przy kazdym starcie programu.
+    wiec sprawdzenie mozna robic przy kazdym starcie programu. `action` jest
+    ignorowane - na Windows ten sam przywilej obejmuje wszystkie akcje.
     """
+    del action
     if not IS_WINDOWS:
         return False, t("priv.non_windows")
 
@@ -308,3 +312,52 @@ def available_sleep_states() -> str:
             continue
         supported.append(stripped)
     return ", ".join(supported[:4])
+
+
+# --- lista procesow (tasklist) -------------------------------------------------
+def _tasklist(args: list[str]) -> str | None:
+    try:
+        return subprocess.run(
+            ["tasklist", *args, "/fo", "csv", "/nh"],
+            capture_output=True, text=True, timeout=15, check=False,
+            encoding="utf-8", errors="replace",  # akcentowana nazwa procesu != crash
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def process_names() -> set[str] | None:
+    """Nazwy wszystkich procesow (male litery). None = tasklist zawiodl."""
+    if not IS_WINDOWS:
+        return None
+    out = _tasklist([])
+    if out is None:
+        return None
+    names = {line.split('","')[0].lstrip('"').lower()
+             for line in out.splitlines() if line.strip()}
+    return names or None  # tasklist odpowiedzial pustka - to awaria, nie "czysto"
+
+
+def claude_code_pids() -> list[int]:
+    """PID-y procesow sesji Claude Code wedlug systemu."""
+    if not IS_WINDOWS:
+        return []
+    out = _tasklist(["/fi", "IMAGENAME eq claude.exe"])
+    found: list[int] = []
+    for line in (out or "").splitlines():
+        parts = [p.strip('"') for p in line.split('","')]
+        if len(parts) < 2 or not parts[0].lower().startswith("claude"):
+            continue
+        try:
+            pid = int(parts[1])
+        except ValueError:
+            continue
+        # Sama nazwa claude.exe nie wystarczy: aplikacja desktopowa uruchamia
+        # kilkanascie procesow pomocniczych (renderer, gpu, crashpad) o tej samej
+        # nazwie. Sesja Claude Code to binarka spod claude-code\<wersja>\ i tylko
+        # ona sie liczy. Zmierzone: 26 procesow claude.exe, z czego sesji 6.
+        exe = probe_process(pid).exe.lower().replace("/", "\\")
+        if "claude-code\\" in exe:
+            found.append(pid)
+    return sorted(found)

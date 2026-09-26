@@ -1,12 +1,12 @@
 [project]
 name = "claude-autoshutdown"
-version = "1.1.0"
-description = "Shut down Windows only after every Claude Code session and subagent has really finished"
+version = "1.2.0"
+description = "Shut down Windows or Linux only after every Claude Code session and subagent has really finished"
 readme = "README.md"
 requires-python = ">=3.14"
 license = { file = "LICENSE" }
 keywords = [
-    "claude-code", "anthropic", "ai-agents", "automation", "windows",
+    "claude-code", "anthropic", "ai-agents", "automation", "windows", "linux",
     "shutdown", "power-management", "tkinter", "unattended", "monitoring",
 ]
 dependencies = []
