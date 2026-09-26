@@ -9,7 +9,7 @@ idle. Built for unattended overnight agent runs.
 
 [![Python](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)](#requirements)
-[![Tests](https://img.shields.io/badge/tests-191%20collected-brightgreen)](#tests)
+[![Tests](https://img.shields.io/badge/tests-202%20collected-brightgreen)](#tests)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-none-brightgreen)](#requirements)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 

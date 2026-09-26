@@ -252,3 +252,30 @@ def test_idle_fallback_xprintidle(monkeypatch, linux):
     monkeypatch.setattr(linuxprobe, "_query", lambda a: "2500\n" if a[0] == "xprintidle"
                         else None)
     assert linuxprobe.human_idle_seconds() == 2.5
+
+
+# --------------------------------------------------------------------------- #
+# jezyk systemu na Linuksie (CI mialo locale C -> wychodzilo "c")
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(("name", "expected"), [
+    ("pl_PL.UTF-8", "pl"), ("en_GB", "en"), ("en-US", "en"), ("Polish_Poland", "pl"),
+    ("C", "en"), ("C.UTF-8", "en"), ("POSIX", "en"), ("", "en"),
+])
+def test_kod_jezyka_z_locale(name, expected):
+    from i18n import _language_code
+    assert _language_code(name) == expected
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="zmienne locale tylko na POSIX")
+@pytest.mark.parametrize(("env", "expected"), [
+    ({"LANGUAGE": "pl:en", "LANG": "en_US.UTF-8"}, "pl"),
+    ({"LANG": "pl_PL.UTF-8"}, "pl"),
+    ({"LC_ALL": "C.UTF-8"}, "en"),
+])
+def test_jezyk_z_zmiennych_srodowiska(monkeypatch, env, expected):
+    from i18n import system_language
+    for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+        monkeypatch.delenv(var, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert system_language() == expected

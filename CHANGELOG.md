@@ -19,6 +19,8 @@ this file starts at the point it was introduced, so earlier history lives in the
 ### Fixed
 - A native-CLI session on Linux (`~/.local/share/claude/versions/<ver>`) would have been
   treated as dead: liveness now looks for "claude" in the full executable path.
+- UI language detection returned `c` under the `C` / `POSIX` locale (CI, systemd services);
+  on Linux it now reads `LANGUAGE` / `LC_ALL` / `LC_MESSAGES` / `LANG` and falls back to English.
 
 ### Added
 - `docs/ARCHITECTURE.md` — module map, where session truth comes from, the decision flow and

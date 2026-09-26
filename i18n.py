@@ -7,6 +7,7 @@ zeby literowka w kluczu byla widoczna na ekranie, a nie cichym pustym napisem.
 from __future__ import annotations
 
 import locale
+import os
 import sys
 
 LANGUAGES: dict[str, str] = {"en": "English", "pl": "Polski"}
@@ -31,14 +32,35 @@ def system_language() -> str:
                 name = buf.value  # np. "en-GB", "pl-PL"
         except (AttributeError, OSError):
             name = ""
+    else:
+        # POSIX: kolejnosc jak w gettext. LANGUAGE bywa lista "pl:en" - bierzemy pierwszy.
+        for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+            value = os.environ.get(var, "").split(":")[0]
+            if value:
+                name = value
+                break
     if not name:
         try:
             name = locale.getlocale()[0] or ""  # np. "pl_PL", "English_United Kingdom"
         except (ValueError, TypeError):
             name = ""
-    code = name.replace("_", "-").split("-")[0].lower()
+    return _language_code(name)
+
+
+def _language_code(name: str) -> str:
+    """'pl_PL.UTF-8' / 'en-GB' / 'Polish_Poland' -> 'pl' / 'en' / 'pl'.
+
+    Locale 'C' / 'POSIX' (CI, uslugi systemd, minimalne systemy) nie niesie jezyka -
+    bez tej kontroli wychodzilo 'c' zamiast kodu jezyka.
+    """
+    code = name.split(".")[0].replace("_", "-").split("-")[0].lower()
+    if code in ("c", "posix"):
+        return DEFAULT_LANGUAGE
     aliases = {"english": "en", "polish": "pl"}
-    return aliases.get(code, code[:2]) if code else DEFAULT_LANGUAGE
+    code = aliases.get(code, code[:2])
+    if len(code) != 2 or not code.isalpha():
+        return DEFAULT_LANGUAGE
+    return code
 
 
 def resolve_language(setting: str | None) -> str:

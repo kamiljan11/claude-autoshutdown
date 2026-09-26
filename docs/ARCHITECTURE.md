@@ -85,7 +85,7 @@ a warning plus the default, never a crash. The knobs that change behaviour most:
 
 ## Tests
 
-`python -m pytest -q` → **191 collected** (parametrised cases included; across
+`python -m pytest -q` → **202 collected** (parametrised cases included; across
 `test_monitor.py`, `test_hardening.py`, `test_app.py`, `test_winprobe.py`,
 `test_linuxprobe.py`; each backend's live tests skip on the other OS), run by
 `.github/workflows/quality.yml` on `windows-latest` and `ubuntu-latest` on every push together with the
