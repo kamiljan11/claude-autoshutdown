@@ -1,15 +1,15 @@
-# Claude AutoShutdown — shut down Windows only after every Claude Code session has really finished
+# Claude AutoShutdown — shut down Windows or Linux only after every Claude Code session has really finished
 
 Leave your AI agents running overnight and let the machine turn itself off — but only once
 **every** Claude Code / Cowork session, including its subagents, has genuinely stopped working.
 
-A small Windows desktop app (Python + Tkinter, **no third-party runtime dependencies**) that
+A small desktop app for **Windows and Linux** (Python + Tkinter, **no third-party runtime dependencies**) that
 watches Claude Code sessions and triggers shutdown, hibernate, sleep or lock when they are all
 idle. Built for unattended overnight agent runs.
 
 [![Python](https://img.shields.io/badge/python-3.14-blue)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20only-lightgrey)](#requirements)
-[![Tests](https://img.shields.io/badge/tests-158%20passing-brightgreen)](#tests)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey)](#requirements)
+[![Tests](https://img.shields.io/badge/tests-202%20collected-brightgreen)](#tests)
 [![Dependencies](https://img.shields.io/badge/runtime%20deps-none-brightgreen)](#requirements)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
@@ -177,14 +177,15 @@ The program must turn the machine off with nobody at the keyboard, so no step ma
 
 | | |
 |---|---|
-| **OS** | **Windows only.** Uses Win32 APIs via `ctypes` (process times, `GetLastInputInfo`, token privileges), `shutdown.exe`, `tasklist`, and a `.vbs` launcher. It will not run on macOS or Linux. |
+| **OS** | **Windows** — Win32 APIs via `ctypes` (process times, `GetLastInputInfo`, token privileges), `shutdown.exe`, `tasklist`, a `.vbs` launcher. **Linux** (systemd) — `/proc`, `systemctl` / `loginctl` through logind, idle time from GNOME Mutter (Wayland and X11) or `xprintidle`. Verified on Ubuntu 26.04 GNOME Wayland. macOS is not supported. |
 | **Python** | **3.14** (developed on 3.14.2 / 3.14.3, CI runs 3.14). Uses `datetime.UTC` (3.11+) and `X \| Y` unions; earlier 3.x versions are untested. Tkinter ships with the python.org installer. |
 | **Dependencies** | None at runtime — standard library only. `pytest` and `ruff` only for the test suite. |
 | **Claude Code** | Reads state from `~/.claude` (override with `CLAUDE_CONFIG_DIR`). Developed against Claude Code **2.1.24x–2.1.26x**; the session-registry and transcript formats are internal and undocumented, so a future Claude Code release could change them. If that happens the tool fails **closed** — unknown formats block shutdown, they never permit it. |
 | **Session types** | Verified with sessions from the Claude desktop app (Cowork) **and** from the npm-installed CLI: a `claude -p` run from a terminal wrote its `sessions/<PID>.json` within 8 s of starting and removed it on exit, and its `claude.exe` lives under a `claude-code\` path, so the process cross-check applies to both. |
 
 Fresh-machine proof: the CI workflow installs and runs everything on a clean `windows-latest`
-runner with nothing but Python — lint, 158 unit tests and the 13-stage end-to-end run.
+runner with nothing but Python — lint, unit tests and the 13-stage end-to-end run — and does the
+same on a clean `ubuntu-latest` runner (GUI stage under Xvfb).
 
 ## Install
 
@@ -201,7 +202,7 @@ on every push as a downloadable artifact so you can compare.
 ```bash
 git clone https://github.com/kamiljan11/claude-autoshutdown.git
 cd claude-autoshutdown
-python -m pytest -q          # optional: 158 tests
+python -m pytest -q          # optional: unit tests
 ```
 
 Start it with **`Claude AutoShutdown.vbs`** (no console window), or
@@ -216,6 +217,20 @@ $s.TargetPath = 'wscript.exe'
 $s.Arguments  = '"C:\path\to\claude-autoshutdown\Claude AutoShutdown.vbs"'
 $s.Save()
 ```
+
+**Option C — Linux (systemd: Ubuntu, Fedora, Debian, Arch…).**
+
+```bash
+git clone https://github.com/kamiljan11/claude-autoshutdown.git ~/src/claude-autoshutdown
+cd ~/src/claude-autoshutdown
+./install-linux.sh              # app-menu entry + desktop shortcut
+./install-linux.sh --autostart  # optional: also start at login (it starts DISARMED)
+```
+
+Needs `python3` ≥ 3.14 with Tkinter (`sudo apt install python3-tk` if missing). No `sudo` at
+runtime: shutdown, suspend and lock go through logind, which lets the logged-in user do them
+without a password. `./install-linux.sh --uninstall` removes the shortcuts. Everything else
+works as on Windows — same UI, same config, same safety gates.
 
 It starts **disarmed and in dry-run mode**. To make it actually shut down, untick "Dry run" in
 Settings and click ARM. To skip the click after every reboot, tick "Arm automatically at start".
@@ -243,7 +258,7 @@ The state directory (config, log, `STOP` file) can be moved with `CLAUDE_AUTOSHU
 ## Tests
 
 ```bash
-python -m pytest -q      # 158 unit tests
+python -m pytest -q      # unit tests
 python ultimate_test.py  # 13-stage end-to-end run
 ```
 
@@ -272,7 +287,11 @@ the machine down mid-run.
 - The program knows nothing about work **outside** Claude Code: a running `git push`, a render, an
   upload. Use `guard_patterns` for those.
 - `sleep` on a machine with hibernation enabled usually hibernates — that's Windows behaviour.
-- Windows only; no installer.
+- Linux: hibernation is off on most distributions (logind answers `CanHibernate = no`); the
+  Settings tab shows what logind allows and arming refuses an action it would reject.
+- Linux: on a desktop other than GNOME, user idle time needs `xprintidle` (X11). Without it the
+  idle time is unknown, which — as on Windows — does not block shutdown.
+- No installer on Windows; a shortcut script on Linux.
 
 ## Keywords
 

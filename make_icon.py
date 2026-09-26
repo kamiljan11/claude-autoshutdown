@@ -75,10 +75,16 @@ def build_ico(sizes: tuple[int, ...] = SIZES) -> bytes:
     return header + entries + blobs
 
 
+PNG_OUT = OUT.with_suffix(".png")  # Linux: Tk iconphoto + skrot .desktop nie czytaja .ico
+PNG_SIZE = 256
+
+
 def main() -> None:
     OUT.parent.mkdir(exist_ok=True)
     OUT.write_bytes(build_ico())
     print(f"{OUT} ({OUT.stat().st_size:,} B, rozmiary {SIZES})")
+    PNG_OUT.write_bytes(_png(PNG_SIZE, _render(PNG_SIZE)))
+    print(f"{PNG_OUT} ({PNG_OUT.stat().st_size:,} B, {PNG_SIZE}px)")
 
 
 if __name__ == "__main__":

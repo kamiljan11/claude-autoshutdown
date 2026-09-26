@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-import winprobe
+import probe
 from i18n import AUTO, LANGUAGES, current_language, set_language, t
 from monitor import (
     Session,
@@ -117,6 +117,11 @@ OK_COLOR = "#3fb950"
 WARN_COLOR = "#d29922"
 BAD_COLOR = "#f85149"
 
+# Segoe UI / Consolas nie istnieja na Linuksie - Tk podstawilby bitmapowy fallback.
+UI_FONT = "Segoe UI" if sys.platform == "win32" else "Ubuntu"
+MONO_FONT = "Consolas" if sys.platform == "win32" else "Ubuntu Mono"
+WM_CLASS = "Claudeautoshutdown"  # Tk zostawia wielka tylko pierwsza litere
+
 
 # Ostrzezenia z ostatniego load_config() - GUI wypisuje je do logu przy starcie,
 # zeby recznie zepsuty config.json nie byl cicho "naprawiany" bez sladu.
@@ -177,7 +182,7 @@ def validate_config(raw: dict) -> tuple[dict, list[str]]:
             cfg[key] = _coerce_int(key, raw[key], warnings)
 
     action = str(raw.get("action") or DEFAULT_CONFIG["action"])
-    if action not in winprobe.POWER_ACTIONS:
+    if action not in probe.POWER_ACTIONS:
         # Nieznana akcja NIE moze cicho zamienic sie w "wylacz komputer".
         warnings.append(f"action: nieznana wartosc {action!r}, przelaczam na 'nothing'")
         action = "nothing"
@@ -274,14 +279,15 @@ def another_instance_running() -> int | None:
         pid, started = int(raw[0]), int(raw[1])
     except (OSError, ValueError, IndexError):
         return None
-    info = winprobe.probe_process(pid)
-    if info.alive and abs(info.created_filetime - started) <= 10_000_000:
+    info = probe.probe_process(pid)
+    tolerance = probe.PROC_START_UNITS_PER_SECOND  # 1 s w jednostkach procStart
+    if info.alive and abs(info.created_filetime - started) <= tolerance:
         return pid
     return None
 
 
 def claim_instance_lock() -> None:
-    info = winprobe.probe_process(os.getpid())
+    info = probe.probe_process(os.getpid())
     try:
         LOCK_FILE.write_text(f"{os.getpid()} {info.created_filetime}", encoding="utf-8")
     except OSError:
@@ -355,7 +361,7 @@ class MonitorThread(threading.Thread):
             quiet_seconds=float(cfg["quiet_seconds"]),
             armed=self.app.armed,
             stop_file_present=stop_file_present(),
-            human_idle=winprobe.human_idle_seconds(),
+            human_idle=probe.human_idle_seconds(),
             require_human_idle=bool(cfg["require_human_idle"]),
             human_idle_required=float(cfg["human_idle_required"]),
             allow_zero_sessions=bool(cfg["allow_zero_sessions"]),
@@ -401,12 +407,12 @@ class CountdownWindow(tk.Toplevel):
         self.geometry(f"{app.px(600)}x{app.px(330)}")
 
         tk.Label(self, text=t("countdown.heading"),
-                 bg=BG, fg=FG, font=("Segoe UI", 16, "bold")).pack(pady=(24, 4))
+                 bg=BG, fg=FG, font=(UI_FONT, 16, "bold")).pack(pady=(24, 4))
         tk.Label(self, text=action_label, bg=BG, fg=WARN_COLOR,
-                 font=("Segoe UI", 12)).pack()
+                 font=(UI_FONT, 12)).pack()
 
         self.counter = tk.Label(self, text=str(seconds), bg=BG, fg=BAD_COLOR,
-                                font=("Segoe UI", 72, "bold"))
+                                font=(UI_FONT, 72, "bold"))
         self.counter.pack(pady=6)
 
         # Obietnica "ruch myszy przerwie akcje" jest prawdziwa tylko, gdy bramka
@@ -414,20 +420,20 @@ class CountdownWindow(tk.Toplevel):
         note_key = ("countdown.note" if app.cfg.get("require_human_idle", True)
                     else "countdown.note_no_idle")
         self.note = tk.Label(self, text=t(note_key),
-                             bg=BG, fg=FG_DIM, font=("Segoe UI", 9))
+                             bg=BG, fg=FG_DIM, font=(UI_FONT, 9))
         self.note.pack()
 
         row = tk.Frame(self, bg=BG)
         row.pack(pady=16)
         self.cancel_button = tk.Button(
             row, text=t("countdown.cancel"), command=lambda: self.cancel(t("countdown.reason.button")),
-            bg=OK_COLOR, fg="#0b0f14", font=("Segoe UI", 13, "bold"), width=16,
+            bg=OK_COLOR, fg="#0b0f14", font=(UI_FONT, 13, "bold"), width=16,
             relief="flat", cursor="hand2")
         self.cancel_button.pack(side="left", padx=8)
         # "Wykonaj teraz" celowo nie przyjmuje focusu klawiatury - przypadkowa spacja
         # ma anulowac, nigdy przyspieszyc wylaczenie.
         tk.Button(row, text=t("countdown.now"), command=self.fire, bg=BG_ROW, fg=FG,
-                  font=("Segoe UI", 10), width=14, relief="flat", takefocus=0,
+                  font=(UI_FONT, 10), width=14, relief="flat", takefocus=0,
                   cursor="hand2").pack(side="left", padx=8)
 
         self.lift()
@@ -497,7 +503,8 @@ class ClaudeAutoShutdown:
         self.selected_session_id: str | None = None
 
         enable_dpi_awareness()
-        self.root = tk.Tk()
+        # className = WM_CLASS; skrot .desktop (StartupWMClass) wiaze po nim ikone w docku.
+        self.root = tk.Tk(className=WM_CLASS)
         # Wszystkie rozmiary podajemy logicznie i mnozymy przez skale monitora.
         self.dpi = self.root.winfo_fpixels("1i") / 96.0
         self.root.title("Claude AutoShutdown")
@@ -520,7 +527,7 @@ class ClaudeAutoShutdown:
         self._append_log(log_line(t(
             "log.start",
             mode=t("log.mode_dry") if self.cfg["dry_run"] else t("log.mode_live"),
-            action=winprobe.POWER_ACTIONS[self.cfg["action"]].label,
+            action=probe.POWER_ACTIONS[self.cfg["action"]].label,
             quiet=self.cfg["quiet_seconds"], idle=self.cfg["human_idle_required"])))
 
         if AUTOARM:
@@ -533,7 +540,7 @@ class ClaudeAutoShutdown:
             # Reszta bramek (cisza, tury, bezczynnosc, odliczanie, STOP) zostaje.
             self.armed = True
             self._append_log(log_line(t(
-                "log.autoarm_cfg", action=winprobe.POWER_ACTIONS[self.cfg["action"]].label,
+                "log.autoarm_cfg", action=probe.POWER_ACTIONS[self.cfg["action"]].label,
                 dry=self.cfg["dry_run"])))
             self._render_header()
 
@@ -550,6 +557,16 @@ class ClaudeAutoShutdown:
         Brak ikony nie jest bledem krytycznym - program ma dzialac i bez niej.
         """
         base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+        if sys.platform != "win32":
+            # Tk na Linuksie nie czyta .ico - PNG przez iconphoto.
+            png = base / "assets" / "icon.png"
+            if png.exists():
+                try:
+                    self._icon_image = tk.PhotoImage(file=str(png))
+                    self.root.iconphoto(True, self._icon_image)
+                except tk.TclError:
+                    pass
+            return
         icon = base / "assets" / "icon.ico"
         if not icon.exists():
             return
@@ -571,9 +588,9 @@ class ClaudeAutoShutdown:
             pass
         style.configure("Treeview", background=BG_ROW, fieldbackground=BG_ROW,
                         foreground=FG, rowheight=self.px(26), borderwidth=0,
-                        font=("Segoe UI", 10))
+                        font=(UI_FONT, 10))
         style.configure("Treeview.Heading", background=BG_PANEL, foreground=FG_DIM,
-                        borderwidth=0, font=("Segoe UI", 9, "bold"))
+                        borderwidth=0, font=(UI_FONT, 9, "bold"))
         style.map("Treeview", background=[("selected", ACCENT)],
                   foreground=[("selected", "#ffffff")])
         style.configure("TCombobox", fieldbackground=BG_ROW, background=BG_ROW)
@@ -587,24 +604,24 @@ class ClaudeAutoShutdown:
         right.pack(side="right", padx=18)
         self.arm_button = tk.Button(right, text=t("btn.arm"), command=self.toggle_arm,
                                     bg=OK_COLOR, fg="#0b0f14", width=13, relief="flat",
-                                    font=("Segoe UI", 12, "bold"), cursor="hand2")
+                                    font=(UI_FONT, 12, "bold"), cursor="hand2")
         self.arm_button.pack(side="right", padx=(10, 0), pady=18)
         self.counts_label = tk.Label(right, text="", bg=BG_PANEL, fg=FG,
-                                     font=("Segoe UI", 10))
+                                     font=(UI_FONT, 10))
         self.counts_label.pack(side="right", padx=12)
         # Przelacznik jezyka: pokazuje TEN DRUGI jezyk (klik = przejdz na niego).
         tk.Button(right, text=t("btn.lang"), command=self.toggle_language, bg=BG_ROW,
-                  fg=FG, width=4, relief="flat", font=("Segoe UI", 9, "bold"),
+                  fg=FG, width=4, relief="flat", font=(UI_FONT, 9, "bold"),
                   cursor="hand2").pack(side="right", padx=(0, 6))
 
         left = tk.Frame(head, bg=BG_PANEL)
         left.pack(side="left", padx=18, pady=12, fill="both", expand=True)
 
         self.state_label = tk.Label(left, text=t("header.disarmed"), bg=BG_PANEL, fg=FG_DIM,
-                                    font=("Segoe UI", 15, "bold"))
+                                    font=(UI_FONT, 15, "bold"))
         self.state_label.pack(anchor="w")
         self.verdict_label = tk.Label(left, text=t("header.starting"), bg=BG_PANEL,
-                                      fg=FG_DIM, font=("Segoe UI", 10))
+                                      fg=FG_DIM, font=(UI_FONT, 10))
         self.verdict_label.pack(anchor="w", pady=(2, 0), fill="x")
 
     def _build_body(self) -> None:
@@ -624,7 +641,7 @@ class ClaudeAutoShutdown:
                            ("settings", t("nav.settings")), ("log", t("nav.log"))):
             btn = tk.Button(nav, text=label, command=lambda k=key: self.show_page(k),
                             bg=BG_PANEL, fg=FG_DIM, relief="flat", anchor="w",
-                            font=("Segoe UI", 11), padx=20, pady=12, cursor="hand2",
+                            font=(UI_FONT, 11), padx=20, pady=12, cursor="hand2",
                             activebackground=BG_ROW, activeforeground=FG)
             btn.pack(fill="x")
             self.nav_buttons[key] = btn
@@ -632,7 +649,7 @@ class ClaudeAutoShutdown:
             self.pages[key] = page
 
         tk.Label(nav, text=t("nav.stop_hint"),
-                 bg=BG_PANEL, fg=FG_DIM, font=("Segoe UI", 8), justify="left",
+                 bg=BG_PANEL, fg=FG_DIM, font=(UI_FONT, 8), justify="left",
                  anchor="w").pack(side="bottom", fill="x", padx=16, pady=14)
 
         self._build_monitor_page(self.pages["monitor"])
@@ -651,7 +668,7 @@ class ClaudeAutoShutdown:
     # --- strona: monitor ---------------------------------------------------
     def _build_monitor_page(self, page: tk.Frame) -> None:
         tk.Label(page, text=t("monitor.title"), bg=BG, fg=FG,
-                 font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=18, pady=(16, 6))
+                 font=(UI_FONT, 12, "bold")).pack(anchor="w", padx=18, pady=(16, 6))
 
         columns = ("state", "name", "where", "why", "silence", "cpu", "subs", "pid")
         wrap = tk.Frame(page, bg=BG)
@@ -679,7 +696,7 @@ class ClaudeAutoShutdown:
         self.tree.bind("<Double-1>", lambda _e: self.show_page("preview"))
 
         tk.Label(page, text=t("monitor.conditions"), bg=BG,
-                 fg=FG, font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=18,
+                 fg=FG, font=(UI_FONT, 12, "bold")).pack(anchor="w", padx=18,
                                                             pady=(18, 6))
         self.checks_frame = tk.Frame(page, bg=BG_PANEL)
         self.checks_frame.pack(fill="both", expand=True, padx=18, pady=(0, 18))
@@ -698,18 +715,18 @@ class ClaudeAutoShutdown:
         top = tk.Frame(page, bg=BG)
         top.pack(fill="x", padx=18, pady=(16, 8))
         tk.Label(top, text=t("preview.session"), bg=BG, fg=FG_DIM,
-                 font=("Segoe UI", 10)).pack(side="left")
+                 font=(UI_FONT, 10)).pack(side="left")
         self.preview_combo = ttk.Combobox(top, state="readonly", width=52)
         self.preview_combo.pack(side="left", padx=8)
         self.preview_combo.bind("<<ComboboxSelected>>", self._on_combo_select)
         self.preview_status = tk.Label(top, text="", bg=BG, fg=FG_DIM,
-                                       font=("Segoe UI", 9))
+                                       font=(UI_FONT, 9))
         self.preview_status.pack(side="left", padx=12)
 
         wrap = tk.Frame(page, bg=BG_PANEL)
         wrap.pack(fill="both", expand=True, padx=18, pady=(0, 18))
         self.preview_text = tk.Text(wrap, bg=BG_PANEL, fg=FG, relief="flat", wrap="word",
-                                    font=("Consolas", 9), padx=12, pady=10,
+                                    font=(MONO_FONT, 9), padx=12, pady=10,
                                     insertbackground=FG)
         scroll = ttk.Scrollbar(wrap, orient="vertical", command=self.preview_text.yview)
         self.preview_text.configure(yscrollcommand=scroll.set, state="disabled")
@@ -744,13 +761,13 @@ class ClaudeAutoShutdown:
 
         def add_row(row: int, key: str, label: str, hint: str) -> None:
             tk.Label(wrap, text=label, bg=BG, fg=FG,
-                     font=("Segoe UI", 10)).grid(row=row, column=0, sticky="w", pady=6)
+                     font=(UI_FONT, 10)).grid(row=row, column=0, sticky="w", pady=6)
             var = tk.StringVar(value=str(self.cfg[key]))
             self.vars[key] = var
             tk.Entry(wrap, textvariable=var, width=12, bg=BG_ROW, fg=FG, relief="flat",
                      insertbackground=FG).grid(row=row, column=1, sticky="w", padx=10)
             tk.Label(wrap, text=hint, bg=BG, fg=FG_DIM,
-                     font=("Segoe UI", 9)).grid(row=row, column=2, sticky="w")
+                     font=(UI_FONT, 9)).grid(row=row, column=2, sticky="w")
 
         add_row(0, "quiet_seconds", t("settings.quiet"), t("settings.quiet.hint"))
         add_row(1, "poll_seconds", t("settings.poll"), t("settings.poll.hint"))
@@ -762,14 +779,14 @@ class ClaudeAutoShutdown:
 
         row = 5
         tk.Label(wrap, text=t("settings.action"), bg=BG, fg=FG,
-                 font=("Segoe UI", 10)).grid(row=row, column=0, sticky="w", pady=6)
+                 font=(UI_FONT, 10)).grid(row=row, column=0, sticky="w", pady=6)
         self.action_var = tk.StringVar(value=self.cfg["action"])
         action_box = ttk.Combobox(wrap, textvariable=self.action_var, state="readonly",
                                   width=28,
                                   values=[f"{k} - {a.label}"
-                                          for k, a in winprobe.POWER_ACTIONS.items()])
+                                          for k, a in probe.POWER_ACTIONS.items()])
         action_box.set(f"{self.cfg['action']} - "
-                       f"{winprobe.POWER_ACTIONS[self.cfg['action']].label}")
+                       f"{probe.POWER_ACTIONS[self.cfg['action']].label}")
         action_box.grid(row=row, column=1, columnspan=2, sticky="w", padx=10)
 
         row += 1
@@ -787,48 +804,48 @@ class ClaudeAutoShutdown:
         ):
             tk.Checkbutton(wrap, text=text, variable=var, bg=BG, fg=FG, selectcolor=BG_ROW,
                            activebackground=BG, activeforeground=FG, relief="flat",
-                           font=("Segoe UI", 10)).grid(row=row, column=0, columnspan=2,
+                           font=(UI_FONT, 10)).grid(row=row, column=0, columnspan=2,
                                                        sticky="w", pady=3)
             tk.Label(wrap, text=hint, bg=BG, fg=FG_DIM,
-                     font=("Segoe UI", 9)).grid(row=row, column=2, sticky="w")
+                     font=(UI_FONT, 9)).grid(row=row, column=2, sticky="w")
             row += 1
 
         tk.Label(wrap, text=t("settings.guards"), bg=BG, fg=FG,
-                 font=("Segoe UI", 10)).grid(row=row, column=0, sticky="w", pady=6)
+                 font=(UI_FONT, 10)).grid(row=row, column=0, sticky="w", pady=6)
         self.guard_var = tk.StringVar(value=", ".join(self.cfg.get("guard_patterns") or []))
         tk.Entry(wrap, textvariable=self.guard_var, width=40, bg=BG_ROW, fg=FG,
                  relief="flat", insertbackground=FG).grid(row=row, column=1, columnspan=2,
                                                           sticky="w", padx=10)
         row += 1
         tk.Label(wrap, text=t("settings.guards.hint"),
-                 bg=BG, fg=FG_DIM, font=("Segoe UI", 9)).grid(row=row, column=1,
+                 bg=BG, fg=FG_DIM, font=(UI_FONT, 9)).grid(row=row, column=1,
                                                               columnspan=2, sticky="w",
                                                               padx=10)
         row += 1
         tk.Button(wrap, text=t("settings.save"), command=self.save_settings, bg=ACCENT,
-                  fg="#ffffff", relief="flat", font=("Segoe UI", 10, "bold"), padx=18,
+                  fg="#ffffff", relief="flat", font=(UI_FONT, 10, "bold"), padx=18,
                   pady=6, cursor="hand2").grid(row=row, column=0, columnspan=2,
                                                sticky="w", pady=18)
         self.settings_status = tk.Label(wrap, text="", bg=BG, fg=OK_COLOR,
-                                        font=("Segoe UI", 9))
+                                        font=(UI_FONT, 9))
         self.settings_status.grid(row=row, column=2, sticky="w")
         self.action_box = action_box
 
         row += 1
-        can_shutdown, why = winprobe.shutdown_capability()
-        states = winprobe.available_sleep_states()
+        can_shutdown, why = probe.shutdown_capability(self.cfg["action"])
+        states = probe.available_sleep_states()
         tk.Label(wrap, text=t("settings.privileges"), bg=BG, fg=FG,
-                 font=("Segoe UI", 10, "bold")).grid(row=row, column=0, sticky="w",
+                 font=(UI_FONT, 10, "bold")).grid(row=row, column=0, sticky="w",
                                                      pady=(10, 2))
         row += 1
         tk.Label(wrap, text=(t("settings.priv_ok") if can_shutdown
                              else t("settings.priv_missing")) + why, bg=BG,
                  fg=OK_COLOR if can_shutdown else BAD_COLOR,
-                 font=("Segoe UI", 9)).grid(row=row, column=0, columnspan=3, sticky="w")
+                 font=(UI_FONT, 9)).grid(row=row, column=0, columnspan=3, sticky="w")
         if states:
             row += 1
             tk.Label(wrap, text=t("settings.power_states", states=states),
-                     bg=BG, fg=FG_DIM, font=("Segoe UI", 9)).grid(
+                     bg=BG, fg=FG_DIM, font=(UI_FONT, 9)).grid(
                 row=row, column=0, columnspan=3, sticky="w")
 
     def save_settings(self) -> None:
@@ -874,7 +891,7 @@ class ClaudeAutoShutdown:
         wrap = tk.Frame(page, bg=BG_PANEL)
         wrap.pack(fill="both", expand=True, padx=18, pady=18)
         self.log_text = tk.Text(wrap, bg=BG_PANEL, fg=FG, relief="flat", wrap="word",
-                                font=("Consolas", 9), padx=12, pady=10)
+                                font=(MONO_FONT, 9), padx=12, pady=10)
         scroll = ttk.Scrollbar(wrap, orient="vertical", command=self.log_text.yview)
         self.log_text.configure(yscrollcommand=scroll.set, state="disabled")
         scroll.pack(side="right", fill="y")
@@ -926,10 +943,10 @@ class ClaudeAutoShutdown:
             return
 
         action_name = self.cfg["action"]
-        action = winprobe.POWER_ACTIONS[action_name]
+        action = probe.POWER_ACTIONS[action_name]
         label = action.label
         if action.needs_privilege:
-            can, why = winprobe.shutdown_capability()
+            can, why = probe.shutdown_capability(action_name)
             if not can:
                 self._append_log(log_line(t("log.arm_refused", why=why)))
                 messagebox.showerror(t("arm.refused_title"),
@@ -1058,7 +1075,7 @@ class ClaudeAutoShutdown:
             if self.last_cancel and since_cancel < COUNTDOWN_COOLDOWN_SECONDS:
                 return
             action, dry_run = self.cfg["action"], bool(self.cfg["dry_run"])
-            label = winprobe.POWER_ACTIONS[action].label
+            label = probe.POWER_ACTIONS[action].label
             if dry_run:
                 label += f"  [{t('log.mode_dry').upper()}]"
             self._append_log(log_line(t(
@@ -1104,14 +1121,14 @@ class ClaudeAutoShutdown:
             messagebox.showwarning(t("action.stale_title"), t("action.stale_body"))
             return
         if dry_run:
-            label = winprobe.POWER_ACTIONS[action].label
+            label = probe.POWER_ACTIONS[action].label
             self._append_log(log_line(t("log.dry_run", label=label)))
             self.armed = False
             self.monitor.reset_stability()
             self._render_header()
             messagebox.showinfo(t("dry.title"), t("dry.body", label=label))
             return
-        ok, detail = winprobe.power_action(
+        ok, detail = probe.power_action(
             action, force=bool(self.cfg.get("force_close_apps", True)))
         if ok:
             self._append_log(log_line(t("log.action_done", detail=detail)))
@@ -1200,11 +1217,11 @@ class ClaudeAutoShutdown:
             row.pack(fill="x", padx=14, pady=3)
             tk.Label(row, text=t("monitor.ok") if passed else t("monitor.no"), width=4,
                      bg=BG_PANEL, fg=OK_COLOR if passed else BAD_COLOR,
-                     font=("Segoe UI", 9, "bold")).pack(side="left")
+                     font=(UI_FONT, 9, "bold")).pack(side="left")
             tk.Label(row, text=name, bg=BG_PANEL, fg=FG, width=34, anchor="w",
-                     font=("Segoe UI", 10)).pack(side="left")
+                     font=(UI_FONT, 10)).pack(side="left")
             tk.Label(row, text=detail, bg=BG_PANEL, fg=FG_DIM, anchor="w",
-                     font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True)
+                     font=(UI_FONT, 9)).pack(side="left", fill="x", expand=True)
 
     def _render_combo(self) -> None:
         """Lista w Podgladzie: sesja, a pod nia jej subagenci (najswiezsi pierwsi).
@@ -1330,10 +1347,10 @@ def _report_crash(exc_type, exc, tb) -> None:
 
 def state_dir_writable() -> bool:
     """Katalog stanu MUSI byc zapisywalny: bez tego nie ma logu, blokady ani STOP."""
-    probe = APP_DIR / ".write-test"
+    marker = APP_DIR / ".write-test"
     try:
-        probe.write_text("ok", encoding="utf-8")
-        probe.unlink()
+        marker.write_text("ok", encoding="utf-8")
+        marker.unlink()
         return True
     except OSError:
         return False

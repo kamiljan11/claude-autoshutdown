@@ -6,7 +6,7 @@ version of them shut a machine down mid-run.
 
 ## What the program has to get right
 
-Windows must go to sleep **only** when every Claude Code / Cowork session — including the
+The machine (Windows or Linux) must go to sleep **only** when every Claude Code / Cowork session — including the
 subagents a session spawns — has genuinely stopped working. Every mistake is expensive in one
 of two directions: shutting down too early kills an unattended overnight run, and never
 shutting down defeats the entire point of the tool. There is no "roughly right" here.
@@ -15,12 +15,15 @@ shutting down defeats the entire point of the tool. There is no "roughly right" 
 
 | File | Responsibility | Depends on |
 |---|---|---|
-| `autoshutdown.py` | Tkinter UI, config load/validate/save, single-instance lock, log rotation, `MonitorThread`, `CountdownWindow` (the cancellable countdown before the power action) | `monitor`, `i18n`, `winprobe` |
-| `monitor.py` | The engine. Scans live sessions, classifies each turn, produces a `Verdict` (`evaluate()`). Contains no UI code and no power actions | `winprobe`, `i18n` |
-| `winprobe.py` | The only place that touches Win32, via `ctypes` — process probe (alive / exe / start time / CPU), human idle time, power action | stdlib only |
+| `autoshutdown.py` | Tkinter UI, config load/validate/save, single-instance lock, log rotation, `MonitorThread`, `CountdownWindow` (the cancellable countdown before the power action) | `monitor`, `i18n`, `probe` |
+| `monitor.py` | The engine. Scans live sessions, classifies each turn, produces a `Verdict` (`evaluate()`). Contains no UI code, no power actions and no OS calls | `probe`, `i18n` |
+| `probe.py` | Picks the OS backend at import time; the only OS module the rest of the program imports | `winprobe` or `linuxprobe` |
+| `winprobe.py` | Windows backend, via `ctypes` — process probe (alive / exe / start time / CPU), process list (`tasklist`), human idle time, power action | stdlib only |
+| `linuxprobe.py` | Linux backend — `/proc`, logind (`systemctl` / `loginctl` / `busctl`), idle time from GNOME Mutter or `xprintidle`. See [ADR 0003](adr/0003-linux-backend.md) | stdlib only |
 | `i18n.py` | UI strings in English and Polish; language follows the Windows display language, switchable in the header | stdlib only |
 | `build_exe.py`, `make_icon.py` | Build a standalone `.exe` (PyInstaller, one file, no console) and generate the icon without an image library | stdlib + PyInstaller (build time only) |
-| `Claude AutoShutdown.vbs` | Launcher that starts the app without a console window | — |
+| `Claude AutoShutdown.vbs` | Windows launcher that starts the app without a console window | — |
+| `install-linux.sh` | Linux: writes `.desktop` shortcuts (app menu, desktop, optional autostart) | — |
 
 Runtime dependencies: **none**. Python 3.14 standard library plus `ctypes`. PyInstaller is a
 build-time tool, not a runtime dependency, and Tkinter ships with CPython on Windows.
@@ -82,17 +85,18 @@ a warning plus the default, never a crash. The knobs that change behaviour most:
 
 ## Tests
 
-`python -m pytest -q` → **158 passed** (parametrised cases included; 112 test functions across
-`test_monitor.py`, `test_hardening.py`, `test_app.py`, `test_winprobe.py`), run by
-`.github/workflows/quality.yml` on every push together with the
+`python -m pytest -q` → **202 collected** (parametrised cases included; across
+`test_monitor.py`, `test_hardening.py`, `test_app.py`, `test_winprobe.py`,
+`test_linuxprobe.py`; each backend's live tests skip on the other OS), run by
+`.github/workflows/quality.yml` on `windows-latest` and `ubuntu-latest` on every push together with the
 linter and a synthetic end-to-end run. The engine is written so that it can be tested without a
 live Claude session: `SessionScanner` and `evaluate()` take paths and clock values as inputs, so
 the whole decision path runs against fixture directories.
 
 ## Boundaries
 
-- Windows only, on purpose: `winprobe.py` is `ctypes.wintypes` all the way down. A port would
-  mean a second backend behind the same three functions, not changes elsewhere.
+- Two backends behind one contract (`probe.py`): `winprobe.py` and `linuxprobe.py`. A third OS
+  (macOS) would be a third backend with the same functions, not changes elsewhere.
 - The engine never performs the power action itself; it returns a verdict. The UI decides,
   shows the countdown and calls `winprobe.power_action`. Keep that split — it is what makes
   `dry_run` and the tests possible.

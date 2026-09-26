@@ -7,6 +7,7 @@ zeby literowka w kluczu byla widoczna na ekranie, a nie cichym pustym napisem.
 from __future__ import annotations
 
 import locale
+import os
 import sys
 
 LANGUAGES: dict[str, str] = {"en": "English", "pl": "Polski"}
@@ -17,7 +18,7 @@ _current = DEFAULT_LANGUAGE
 
 
 def system_language() -> str:
-    """Dwuliterowy kod jezyka interfejsu Windows (np. 'en', 'pl'), 'en' gdy nieznany.
+    """Dwuliterowy kod jezyka interfejsu (np. 'en', 'pl'), 'en' gdy nieznany.
 
     Na Windows pytamy o jezyk UI uzytkownika, nie o locale procesu Pythona - to
     pierwsze jest tym, co uzytkownik faktycznie widzi w systemie.
@@ -31,14 +32,35 @@ def system_language() -> str:
                 name = buf.value  # np. "en-GB", "pl-PL"
         except (AttributeError, OSError):
             name = ""
+    else:
+        # POSIX: kolejnosc jak w gettext. LANGUAGE bywa lista "pl:en" - bierzemy pierwszy.
+        for var in ("LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"):
+            value = os.environ.get(var, "").split(":")[0]
+            if value:
+                name = value
+                break
     if not name:
         try:
             name = locale.getlocale()[0] or ""  # np. "pl_PL", "English_United Kingdom"
         except (ValueError, TypeError):
             name = ""
-    code = name.replace("_", "-").split("-")[0].lower()
+    return _language_code(name)
+
+
+def _language_code(name: str) -> str:
+    """'pl_PL.UTF-8' / 'en-GB' / 'Polish_Poland' -> 'pl' / 'en' / 'pl'.
+
+    Locale 'C' / 'POSIX' (CI, uslugi systemd, minimalne systemy) nie niesie jezyka -
+    bez tej kontroli wychodzilo 'c' zamiast kodu jezyka.
+    """
+    code = name.split(".")[0].replace("_", "-").split("-")[0].lower()
+    if code in ("c", "posix"):
+        return DEFAULT_LANGUAGE
     aliases = {"english": "en", "polish": "pl"}
-    return aliases.get(code, code[:2]) if code else DEFAULT_LANGUAGE
+    code = aliases.get(code, code[:2])
+    if len(code) != 2 or not code.isalpha():
+        return DEFAULT_LANGUAGE
+    return code
 
 
 def resolve_language(setting: str | None) -> str:
@@ -142,6 +164,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "priv.not_assigned": "account lacks the shutdown privilege (ERROR_NOT_ALL_ASSIGNED)",
         "priv.adjust_error": "AdjustTokenPrivileges error {code}",
         "priv.non_windows": "not Windows",
+        "priv.unsupported": "unsupported operating system",
+        "priv.logind_yes": "logind {method} = yes - action available",
+        "priv.logind_no": "logind {method} = {answer} - this system does not support it",
+        "priv.logind_challenge": "logind {method} = challenge - needs a password nobody will type at night",
+        "priv.not_needed": "no special permission needed",
+        "priv.logind_unknown": "logind did not answer {method} (busctl missing or no D-Bus)",
+        "power.skipped_unsupported": "{label} - skipped (unsupported operating system)",
         # --- header ---------------------------------------------------------------
         "app.title": "Claude AutoShutdown",
         "header.armed": "● ARMED",
@@ -379,6 +408,13 @@ STRINGS: dict[str, dict[str, str]] = {
         "priv.not_assigned": "konto nie ma przywileju wylaczania (ERROR_NOT_ALL_ASSIGNED)",
         "priv.adjust_error": "AdjustTokenPrivileges blad {code}",
         "priv.non_windows": "nie-Windows",
+        "priv.unsupported": "nieobslugiwany system operacyjny",
+        "priv.logind_yes": "logind {method} = yes - akcja dostepna",
+        "priv.logind_no": "logind {method} = {answer} - system tego nie obsluguje",
+        "priv.logind_challenge": "logind {method} = challenge - wymaga hasla, ktorego w nocy nikt nie wpisze",
+        "priv.not_needed": "nie wymaga specjalnych uprawnien",
+        "priv.logind_unknown": "logind nie odpowiedzial na {method} (brak busctl albo D-Bus)",
+        "power.skipped_unsupported": "{label} - pominieto (nieobslugiwany system)",
         "app.title": "Claude AutoShutdown",
         "header.armed": "● UZBROJONY",
         "header.disarmed": "● ROZBROJONY",

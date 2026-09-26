@@ -222,6 +222,23 @@ nie dotyka.
 
 ---
 
+## Linux
+
+Działa też na Linuksie z systemd (sprawdzone: Ubuntu 26.04, GNOME, Wayland). Ten sam program,
+ten sam interfejs i te same bezpieczniki — inny jest tylko backend systemowy (`linuxprobe.py`):
+procesy z `/proc`, wyłączanie / uśpienie / blokada przez logind (`systemctl`, `loginctl`, bez
+`sudo`), bezczynność użytkownika z GNOME Mutter albo `xprintidle`.
+
+```bash
+git clone https://github.com/kamiljan11/claude-autoshutdown.git ~/src/claude-autoshutdown
+cd ~/src/claude-autoshutdown
+./install-linux.sh              # skrót w menu aplikacji + na pulpicie
+./install-linux.sh --autostart  # opcjonalnie start po zalogowaniu (startuje ROZBROJONY)
+```
+
+Hibernacja jest na większości dystrybucji wyłączona (`CanHibernate = no`) — zakładka Ustawienia
+pokazuje, na co logind pozwala, a uzbrojenie odmawia akcji, której system nie wykona.
+
 ## Ograniczenia — czytaj przed zaufaniem na noc
 
 - Sesja czekająca na Twoją odpowiedź na pytanie o uprawnienia ma **otwartą turę**,
