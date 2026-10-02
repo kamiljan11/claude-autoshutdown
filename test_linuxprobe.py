@@ -383,20 +383,46 @@ def test_stary_format_blokady_dalej_dziala(app_mod):
     assert app_mod.another_instance_running() == os.getpid()
 
 
+class _Var:
+    def __init__(self, value):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+
+def _fake_app(app_mod, cfg, **ui):
+    """Atrapa okna dla save_settings: cfg = stan sprzed zapisu, ui = wartosci formularza."""
+    from types import SimpleNamespace
+
+    form = {"action": "shutdown", "dry_run": cfg["dry_run"],
+            "require_human_idle": cfg["require_human_idle"],
+            "allow_zero_sessions": cfg["allow_zero_sessions"],
+            "force_close_apps": cfg["force_close_apps"], **ui}
+    fake = SimpleNamespace(
+        cfg=cfg, armed=True, countdown=None,
+        vars={k: _Var(str(cfg[k])) for k in ("quiet_seconds", "poll_seconds", "required_polls",
+                                              "countdown_seconds", "human_idle_required")},
+        action_box=_Var(f"{form['action']} - x"), dry_var=_Var(form["dry_run"]),
+        human_var=_Var(form["require_human_idle"]), zero_var=_Var(form["allow_zero_sessions"]),
+        armstart_var=_Var(False), force_var=_Var(form["force_close_apps"]), guard_var=_Var(""),
+        monitor=SimpleNamespace(reset_stability=lambda: None, wake=lambda: None),
+        settings_status=SimpleNamespace(config=lambda **_k: None),
+        root=SimpleNamespace(after=lambda *_a: None),
+        _append_log=lambda _line: None, _render_header=lambda: None,
+    )
+    cls = app_mod.ClaudeAutoShutdown
+    fake._report_arm_refusal = lambda refusal, dialog=None: cls._report_arm_refusal(
+        fake, refusal, dialog)
+    fake._arm_summary = lambda: cls._arm_summary(fake)
+    return fake
+
+
 @pytest.mark.parametrize("save_fails", [False, True])
 def test_zmiana_ustawien_w_stanie_uzbrojonym_sprawdza_warunki_ponownie(app_mod, monkeypatch,
                                                                         save_fails):
     """pg-review security: odznacz bezczynnosc -> uzbroj -> zaznacz z powrotem nie moze
     zostawic uzbrojonego programu przy niemierzalnej bezczynnosci."""
-    from types import SimpleNamespace
-
-    class Var:
-        def __init__(self, value):
-            self.value = value
-
-        def get(self):
-            return self.value
-
     shown = []
 
     def save(_cfg):
@@ -409,21 +435,56 @@ def test_zmiana_ustawien_w_stanie_uzbrojonym_sprawdza_warunki_ponownie(app_mod, 
     monkeypatch.setattr(app_mod.probe, "human_idle_seconds", lambda: -1.0)
     monkeypatch.setattr(app_mod.probe, "shutdown_capability", lambda _a: (True, ""))
     cfg = dict(app_mod.DEFAULT_CONFIG, require_human_idle=False)
-    fake = SimpleNamespace(
-        cfg=cfg, armed=True, countdown=None,
-        vars={k: Var(str(cfg[k])) for k in ("quiet_seconds", "poll_seconds", "required_polls",
-                                             "countdown_seconds", "human_idle_required")},
-        action_box=Var("shutdown - x"), dry_var=Var(True), human_var=Var(True),
-        zero_var=Var(False), armstart_var=Var(False), force_var=Var(True), guard_var=Var(""),
-        monitor=SimpleNamespace(reset_stability=lambda: None, wake=lambda: None),
-        settings_status=SimpleNamespace(config=lambda **_k: None),
-        root=SimpleNamespace(after=lambda *_a: None),
-        _append_log=lambda _line: None, _render_header=lambda: None,
-    )
-    fake._report_arm_refusal = (
-        lambda refusal, dialog=None: app_mod.ClaudeAutoShutdown._report_arm_refusal(
-            fake, refusal, dialog))
+    fake = _fake_app(app_mod, cfg, require_human_idle=True)
     app_mod.ClaudeAutoShutdown.save_settings(fake)
     assert fake.cfg["require_human_idle"] is True
     assert fake.armed is False, "niemierzalna bezczynnosc + wymog = rozbrojenie"
     assert shown, "uzytkownik musi dostac komunikat, czemu program sie rozbroil"
+
+
+# --------------------------------------------------------------------------- #
+# grozniejsze ustawienia przy uzbrojonym programie = ponowne potwierdzenie (2026-10-02)
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize(("change", "expected"), [
+    ({"dry_run": False}, True),                    # tryb prob -> bojowy
+    ({"action": "sleep"}, True),                   # inna akcja
+    ({"force_close_apps": True}, True),            # wymuszone zamykanie wlaczone
+    ({"require_human_idle": False}, True),         # zdjety wymog bezczynnosci
+    ({"allow_zero_sessions": True}, True),         # wylaczenie bez zadnej sesji
+    ({"quiet_seconds": 900}, False),               # bezpieczniej / obojetnie
+])
+def test_needs_reconfirm(app_mod, change, expected):
+    old = dict(app_mod.DEFAULT_CONFIG, dry_run=True, force_close_apps=False)
+    assert app_mod.needs_reconfirm(old, {**old, **change}) is expected
+
+
+def test_powrot_do_trybu_prob_nie_pyta(app_mod):
+    old = dict(app_mod.DEFAULT_CONFIG, dry_run=False)
+    assert app_mod.needs_reconfirm(old, {**old, "dry_run": True}) is False
+
+
+@pytest.mark.parametrize("answer", [True, False])
+def test_grozniejsza_zmiana_wymaga_potwierdzenia(app_mod, monkeypatch, answer):
+    asked = []
+    monkeypatch.setattr(app_mod, "save_config", lambda _cfg: None)
+    monkeypatch.setattr(app_mod.messagebox, "askyesno",
+                        lambda *a, **_k: asked.append(a) or answer)
+    monkeypatch.setattr(app_mod.probe, "human_idle_seconds", lambda: 5.0)
+    monkeypatch.setattr(app_mod.probe, "shutdown_capability", lambda _a: (True, ""))
+    cfg = dict(app_mod.DEFAULT_CONFIG, dry_run=True)
+    fake = _fake_app(app_mod, cfg, dry_run=False)
+    app_mod.ClaudeAutoShutdown.save_settings(fake)
+    assert len(asked) == 1, "tryb prob -> bojowy przy uzbrojeniu musi zapytac"
+    assert fake.armed is answer, "Tak = dalej uzbrojony, Nie = rozbrojony"
+
+
+def test_bezpieczna_zmiana_nie_pyta(app_mod, monkeypatch):
+    monkeypatch.setattr(app_mod, "save_config", lambda _cfg: None)
+    monkeypatch.setattr(app_mod.messagebox, "askyesno",
+                        lambda *a, **_k: pytest.fail("nie powinno pytac"))
+    monkeypatch.setattr(app_mod.probe, "human_idle_seconds", lambda: 5.0)
+    monkeypatch.setattr(app_mod.probe, "shutdown_capability", lambda _a: (True, ""))
+    cfg = dict(app_mod.DEFAULT_CONFIG, dry_run=False)
+    fake = _fake_app(app_mod, cfg, dry_run=True)
+    app_mod.ClaudeAutoShutdown.save_settings(fake)
+    assert fake.armed is True

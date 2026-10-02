@@ -33,6 +33,9 @@ from i18n import (
     ARM_REFUSED_LOG,
     AUTO,
     LANGUAGES,
+    RECONFIRM_DECLINED_LOG,
+    RECONFIRM_INTRO,
+    RECONFIRMED_LOG,
     current_language,
     set_language,
     t,
@@ -317,6 +320,23 @@ def arm_refusal(cfg: dict, capability=None, idle_seconds=None) -> tuple[str, str
     if cfg.get("require_human_idle") and idle_seconds() < 0:
         return ARM_IDLE_UNKNOWN, ""
     return None
+
+
+def needs_reconfirm(old: dict, new: dict) -> bool:
+    """Czy zmiana ustawien uzbrojonego programu jest GROZNIEJSZA niz to, co potwierdzono
+    przy uzbrajaniu - wtedy trzeba ja potwierdzic ponownie (decyzja Kamila 2026-10-02).
+
+    Grozniej = tryb prob -> bojowy, inna akcja, wymuszone zamykanie aplikacji wlaczone,
+    zdjety wymog bezczynnosci albo dopuszczone wylaczenie bez zadnej sesji. Zmiany
+    w bezpieczna strone (np. powrot do trybu prob) nie pytaja.
+    """
+    return any((
+        old["dry_run"] and not new["dry_run"],
+        old["action"] != new["action"],
+        not old.get("force_close_apps", True) and new.get("force_close_apps", True),
+        old["require_human_idle"] and not new["require_human_idle"],
+        not old["allow_zero_sessions"] and new["allow_zero_sessions"],
+    ))
 
 
 def claim_instance_lock() -> None:
@@ -884,6 +904,23 @@ class ClaudeAutoShutdown:
                      bg=BG, fg=FG_DIM, font=(UI_FONT, 9)).grid(
                 row=row, column=0, columnspan=3, sticky="w")
 
+    def _arm_summary(self) -> str:
+        """Tresc potwierdzenia uzbrojenia - ta sama przy ARM i przy grozniejszej zmianie."""
+        action_name = self.cfg["action"]
+        label = probe.POWER_ACTIONS[action_name].label
+        mode = t("arm.mode_dry") if self.cfg["dry_run"] else t("arm.mode_live")
+        return (
+            t("arm.summary", label=label, mode=mode, quiet=self.cfg["quiet_seconds"],
+              polls=self.cfg["required_polls"])
+            + (t("arm.summary_idle", idle=self.cfg["human_idle_required"])
+               if self.cfg["require_human_idle"] else "")
+            + t("arm.summary_countdown", countdown=self.cfg["countdown_seconds"])
+            + (t("arm.summary_force")
+               if action_name == "shutdown" and self.cfg.get("force_close_apps", True)
+               else "")
+            + t("arm.summary_question")
+        )
+
     def _report_arm_refusal(self, refusal: tuple[str, str], dialog=None) -> None:
         """Wpis do logu + (opcjonalnie) okno z powodem odmowy uzbrojenia."""
         key, why = refusal
@@ -913,6 +950,7 @@ class ClaudeAutoShutdown:
         new_cfg["force_close_apps"] = bool(self.force_var.get())
         new_cfg["guard_patterns"] = [p.strip() for p in self.guard_var.get().split(",")
                                      if p.strip()]
+        old_cfg = self.cfg
         self.cfg = new_cfg
         # Zaraz po podmianie, PRZED zapisem: monitor czyta self.cfg na zywo, a nieudany
         # zapis (zablokowany config.json) konczy te funkcje wczesniej.
@@ -923,6 +961,14 @@ class ClaudeAutoShutdown:
             self.armed = False
             self._render_header()
             self._report_arm_refusal(refusal, dialog=messagebox.showwarning)
+        elif self.armed and needs_reconfirm(old_cfg, self.cfg):
+            if messagebox.askyesno(t("arm.confirm_title"),
+                                   t(RECONFIRM_INTRO) + self._arm_summary(), icon="warning"):
+                self._append_log(log_line(t(RECONFIRMED_LOG)))
+            else:
+                self.armed = False
+                self._render_header()
+                self._append_log(log_line(t(RECONFIRM_DECLINED_LOG)))
         # Zmiana ustawien w trakcie odliczania: okno pokazuje stara akcje/tryb,
         # wiec odliczanie trzeba przerwac, a nie pozwolic mu wykonac cos innego.
         if self.countdown is not None:
@@ -996,25 +1042,11 @@ class ClaudeAutoShutdown:
             return
 
         action_name = self.cfg["action"]
-        action = probe.POWER_ACTIONS[action_name]
-        label = action.label
         refusal = arm_refusal(self.cfg)
         if refusal:
             self._report_arm_refusal(refusal, dialog=messagebox.showerror)
             return
-        mode = t("arm.mode_dry") if self.cfg["dry_run"] else t("arm.mode_live")
-        summary = (
-            t("arm.summary", label=label, mode=mode, quiet=self.cfg["quiet_seconds"],
-              polls=self.cfg["required_polls"])
-            + (t("arm.summary_idle", idle=self.cfg["human_idle_required"])
-               if self.cfg["require_human_idle"] else "")
-            + t("arm.summary_countdown", countdown=self.cfg["countdown_seconds"])
-            + (t("arm.summary_force")
-               if action_name == "shutdown" and self.cfg.get("force_close_apps", True)
-               else "")
-            + t("arm.summary_question")
-        )
-        if not messagebox.askyesno(t("arm.confirm_title"), summary, icon="warning"):
+        if not messagebox.askyesno(t("arm.confirm_title"), self._arm_summary(), icon="warning"):
             return
         self.armed = True
         self.monitor.reset_stability()
