@@ -262,7 +262,7 @@ def test_cpu_percent_odrzuca_zbyt_krotki_odstep():
     i sesja zostawala na zawsze w stanie PRACUJE (komputer nigdy sie nie wylaczy).
     """
     from monitor import SessionScanner
-    from winprobe import FILETIME_PER_SECOND, ProcInfo
+    from probe import FILETIME_PER_SECOND, ProcInfo
 
     scanner = SessionScanner(root=Path("."))
     pid = 4242
@@ -275,7 +275,7 @@ def test_cpu_percent_odrzuca_zbyt_krotki_odstep():
 
 def test_cpu_percent_liczy_gdy_odstep_wystarczajacy():
     from monitor import SessionScanner
-    from winprobe import FILETIME_PER_SECOND, ProcInfo
+    from probe import FILETIME_PER_SECOND, ProcInfo
 
     scanner = SessionScanner(root=Path("."))
     pid = 4243

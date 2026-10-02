@@ -28,7 +28,15 @@ from pathlib import Path
 from tkinter import messagebox, ttk
 
 import probe
-from i18n import AUTO, LANGUAGES, current_language, set_language, t
+from i18n import (
+    ARM_IDLE_UNKNOWN,
+    ARM_REFUSED_LOG,
+    AUTO,
+    LANGUAGES,
+    current_language,
+    set_language,
+    t,
+)
 from monitor import (
     Session,
     SessionScanner,
@@ -279,6 +287,10 @@ def another_instance_running() -> int | None:
         pid, started = int(raw[0]), int(raw[1])
     except (OSError, ValueError, IndexError):
         return None
+    # Trzecie pole (Linux): blokada z poprzedniego startu systemu to smiec, nawet gdy
+    # PID i czas startu liczony od bootu przypadkiem sie zgadzaja.
+    if len(raw) > 2 and raw[2] != probe.boot_id():
+        return None
     info = probe.probe_process(pid)
     tolerance = probe.PROC_START_UNITS_PER_SECOND  # 1 s w jednostkach procStart
     if info.alive and abs(info.created_filetime - started) <= tolerance:
@@ -286,10 +298,32 @@ def another_instance_running() -> int | None:
     return None
 
 
+def arm_refusal(cfg: dict, capability=None, idle_seconds=None) -> tuple[str, str] | None:
+    """(klucz tresci odmowy, szczegol) albo None, gdy wolno uzbroic.
+
+    Jedno miejsce dla przycisku ARM i dla arm_on_start. Sprawdza:
+      * uprawnienie do WYBRANEJ akcji (sleep pyta logind o CanSuspend, nie CanPowerOff),
+      * czy bezczynnosc czlowieka da sie zmierzyc, gdy jej wymagamy. Silnik traktuje
+        nieznana bezczynnosc jako "nie blokuje" (zeby nie trzymac maszyny w nieskonczonosc),
+        wiec tu, przed uzbrojeniem, uzytkownik dowiaduje sie o tym i decyduje swiadomie.
+    """
+    capability = capability or probe.shutdown_capability
+    idle_seconds = idle_seconds or probe.human_idle_seconds
+    action_name = cfg["action"]
+    if probe.POWER_ACTIONS[action_name].needs_privilege:
+        can, why = capability(action_name)
+        if not can:
+            return "arm.refused_body", why
+    if cfg.get("require_human_idle") and idle_seconds() < 0:
+        return ARM_IDLE_UNKNOWN, ""
+    return None
+
+
 def claim_instance_lock() -> None:
     info = probe.probe_process(os.getpid())
     try:
-        LOCK_FILE.write_text(f"{os.getpid()} {info.created_filetime}", encoding="utf-8")
+        LOCK_FILE.write_text(f"{os.getpid()} {info.created_filetime} {probe.boot_id()}".strip(),
+                             encoding="utf-8")
     except OSError:
         pass  # brak blokady jest lepszy niz brak programu
 
@@ -534,6 +568,8 @@ class ClaudeAutoShutdown:
             self.armed = True
             self._append_log(log_line(t("log.autoarm_env")))
             self._render_header()
+        elif self.cfg.get("arm_on_start") and (refusal := arm_refusal(self.cfg)):
+            self._report_arm_refusal(refusal, dialog=None)
         elif self.cfg.get("arm_on_start"):
             # Swiadome oslabienie bezpiecznika nr 1: program uzbraja sie sam po
             # starcie, zeby po restarcie komputera nie trzeba bylo nic klikac.
@@ -848,6 +884,14 @@ class ClaudeAutoShutdown:
                      bg=BG, fg=FG_DIM, font=(UI_FONT, 9)).grid(
                 row=row, column=0, columnspan=3, sticky="w")
 
+    def _report_arm_refusal(self, refusal: tuple[str, str], dialog=None) -> None:
+        """Wpis do logu + (opcjonalnie) okno z powodem odmowy uzbrojenia."""
+        key, why = refusal
+        self._append_log(log_line(t(ARM_REFUSED_LOG, why=why or t(key))))
+        if dialog is not None:
+            label = probe.POWER_ACTIONS[self.cfg["action"]].label
+            dialog(t("arm.refused_title"), t(key, label=label, why=why))
+
     def save_settings(self) -> None:
         # Budujemy KOPIE i podmieniamy referencje jednym przypisaniem. Mutowanie
         # slownika w miejscu dawaloby watkowi monitora cykl z polowa starych,
@@ -879,6 +923,13 @@ class ClaudeAutoShutdown:
         except OSError as exc:
             messagebox.showerror(t("settings.err_save"), str(exc))
             return
+        # Uzbrojenie sprawdzalo warunki dla STARYCH ustawien. Bez tego dalo sie odznaczyc
+        # "wymagaj bezczynnosci", uzbroic i zaznaczyc ja z powrotem przy niemierzalnej
+        # bezczynnosci - albo zmienic akcje na taka, ktorej system nie pozwala.
+        if self.armed and (refusal := arm_refusal(self.cfg)):
+            self.armed = False
+            self._render_header()
+            self._report_arm_refusal(refusal, dialog=messagebox.showwarning)
         self.monitor.reset_stability()
         self.monitor.wake()
         self.settings_status.config(text=t("settings.saved"))
@@ -945,13 +996,10 @@ class ClaudeAutoShutdown:
         action_name = self.cfg["action"]
         action = probe.POWER_ACTIONS[action_name]
         label = action.label
-        if action.needs_privilege:
-            can, why = probe.shutdown_capability(action_name)
-            if not can:
-                self._append_log(log_line(t("log.arm_refused", why=why)))
-                messagebox.showerror(t("arm.refused_title"),
-                                     t("arm.refused_body", label=label, why=why))
-                return
+        refusal = arm_refusal(self.cfg)
+        if refusal:
+            self._report_arm_refusal(refusal, dialog=messagebox.showerror)
+            return
         mode = t("arm.mode_dry") if self.cfg["dry_run"] else t("arm.mode_live")
         summary = (
             t("arm.summary", label=label, mode=mode, quiet=self.cfg["quiet_seconds"],

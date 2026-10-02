@@ -19,6 +19,16 @@ this file starts at the point it was introduced, so earlier history lives in the
 ### Fixed
 - A native-CLI session on Linux (`~/.local/share/claude/versions/<ver>`) would have been
   treated as dead: liveness now looks for "claude" in the full executable path.
+- Arming (button and `arm_on_start`) is refused when "Require user to be idle" is on but idle
+  time cannot be measured (non-GNOME Linux without `xprintidle`); `arm_on_start` now also
+  checks the action's permission, which it previously skipped.
+- Saving settings while armed re-checks the arming conditions and disarms with a message when
+  they no longer hold (closes "untick idle, arm, tick it back" and switching to a forbidden
+  action while armed). CI workflow token is now read-only (`permissions: contents: read`).
+- Linux instance lock stores the boot id: a lock left by a shutdown no longer blocks the next
+  start when PID and boot-relative start time happen to repeat.
+- `install-linux.sh` rejects paths that would break the `.desktop` `Exec=` line and escapes
+  `%`; CI now really runs the installer in a sandboxed `HOME` and validates every shortcut.
 - UI language detection returned `c` under the `C` / `POSIX` locale (CI, systemd services);
   on Linux it now reads `LANGUAGE` / `LC_ALL` / `LC_MESSAGES` / `LANG` and falls back to English.
 

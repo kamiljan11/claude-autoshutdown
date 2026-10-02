@@ -18,10 +18,14 @@ import sys
 import threading
 from ctypes import wintypes
 from dataclasses import dataclass
+from typing import Any
 
 from i18n import t
 
 IS_WINDOWS = sys.platform == "win32"
+# WinDLL / windll / *_last_error istnieja tylko w ctypes na Windows. Ten sam modul pod
+# typem Any, zeby sprawdzanie typow na Linuksie (CI, laptop) nie zglaszalo ich jako bledow.
+_win: Any = ctypes
 
 # --- stale WinAPI -----------------------------------------------------------
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
@@ -30,8 +34,8 @@ FILETIME_PER_SECOND = 10_000_000  # FILETIME tyka co 100 ns
 PROC_START_UNITS_PER_SECOND = FILETIME_PER_SECOND
 
 if IS_WINDOWS:
-    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _user32 = ctypes.WinDLL("user32", use_last_error=True)
+    _kernel32 = _win.WinDLL("kernel32", use_last_error=True)
+    _user32 = _win.WinDLL("user32", use_last_error=True)
 
     class _FILETIME(ctypes.Structure):
         _fields_ = [("dwLowDateTime", wintypes.DWORD),
@@ -193,7 +197,7 @@ def power_action(name: str, force: bool = True) -> tuple[bool, str]:
         # wybudzeniu, wiec leci w osobnym watku, zeby nie zawiesic GUI.
         def _suspend() -> None:
             try:
-                ctypes.windll.powrprof.SetSuspendState(0, 0, 0)
+                _win.windll.powrprof.SetSuspendState(0, 0, 0)
             except (AttributeError, OSError):
                 pass
 
@@ -258,7 +262,7 @@ def shutdown_capability(action: str = "shutdown") -> tuple[bool, str]:
         _fields_ = [("PrivilegeCount", wintypes.DWORD),
                     ("Privileges", _LUID_AND_ATTRIBUTES * 1)]
 
-    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    advapi32 = _win.WinDLL("advapi32", use_last_error=True)
     _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
     advapi32.OpenProcessToken.argtypes = [
         wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
@@ -277,10 +281,10 @@ def shutdown_capability(action: str = "shutdown") -> tuple[bool, str]:
         privileges = _TOKEN_PRIVILEGES(
             1, (_LUID_AND_ATTRIBUTES * 1)(
                 _LUID_AND_ATTRIBUTES(luid, _SE_PRIVILEGE_ENABLED)))
-        ctypes.set_last_error(0)
+        _win.set_last_error(0)
         ok = advapi32.AdjustTokenPrivileges(token, False, ctypes.byref(privileges),
                                             0, None, None)
-        err = ctypes.get_last_error()
+        err = _win.get_last_error()
         if ok and err == 0:
             return True, t("priv.enabled")
         if err == 1300:  # ERROR_NOT_ALL_ASSIGNED
@@ -361,3 +365,9 @@ def claude_code_pids() -> list[int]:
         if "claude-code\\" in exe:
             found.append(pid)
     return sorted(found)
+
+
+def boot_id() -> str:
+    """Na Windows czas startu procesu to bezwzgledny FILETIME - kolizja miedzy
+    restartami jest niemozliwa, wiec identyfikator bootu nie jest potrzebny."""
+    return ""

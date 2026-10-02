@@ -103,6 +103,16 @@ def probe_process(pid: int) -> ProcInfo:
     )
 
 
+def boot_id() -> str:
+    """Identyfikator biezacego startu systemu. Czas startu procesu jest liczony od
+    bootu, wiec bez tego blokada sprzed restartu mogla trafic ten sam PID i te same
+    tyki co nowy proces i udawac zywa instancje."""
+    try:
+        return (PROC_ROOT / "sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    except OSError:
+        return ""
+
+
 def _all_pids() -> list[int] | None:
     try:
         return [int(entry) for entry in os.listdir(PROC_ROOT) if entry.isdigit()]

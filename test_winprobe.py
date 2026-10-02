@@ -165,3 +165,26 @@ def test_probe_wlasnego_procesu():
 def test_probe_nieistniejacego_procesu():
     assert not probe_process(999_999_999).alive
     assert not probe_process(-1).alive
+
+
+# --------------------------------------------------------------------------- #
+# claude_code_pids: tylko binarki spod claude-code\ (pg-review code-2)
+# --------------------------------------------------------------------------- #
+def test_claude_code_pids_filtruje_procesy_pomocnicze(monkeypatch):
+    out = ('"claude.exe","100","Console","1","50 K"\n'
+           '"claude.exe","200","Console","1","50 K"\n'
+           '"claude.exe","300","Console","1","50 K"\n')
+    exes = {100: r"C:\Users\k\AppData\Roaming\Claude\claude-code\2.1.240\claude.exe",
+            200: r"C:\Users\k\AppData\Local\AnthropicClaude\app-1.0\claude.exe",
+            300: "C:/Users/k/AppData/Roaming/Claude/claude-code/2.1.241/claude.exe"}
+    monkeypatch.setattr(winprobe, "IS_WINDOWS", True)
+    monkeypatch.setattr(winprobe, "_tasklist", lambda _args: out)
+    monkeypatch.setattr(winprobe, "probe_process",
+                        lambda pid: winprobe.ProcInfo(pid=pid, alive=True, exe=exes[pid]))
+    assert winprobe.claude_code_pids() == [100, 300]
+
+
+def test_claude_code_pids_awaria_tasklist_to_pusto(monkeypatch):
+    monkeypatch.setattr(winprobe, "IS_WINDOWS", True)
+    monkeypatch.setattr(winprobe, "_tasklist", lambda _args: None)
+    assert winprobe.claude_code_pids() == []
