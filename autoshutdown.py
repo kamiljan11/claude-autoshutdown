@@ -914,6 +914,15 @@ class ClaudeAutoShutdown:
         new_cfg["guard_patterns"] = [p.strip() for p in self.guard_var.get().split(",")
                                      if p.strip()]
         self.cfg = new_cfg
+        # Zaraz po podmianie, PRZED zapisem: monitor czyta self.cfg na zywo, a nieudany
+        # zapis (zablokowany config.json) konczy te funkcje wczesniej.
+        # Uzbrojenie sprawdzalo warunki dla STARYCH ustawien. Bez tego dalo sie odznaczyc
+        # "wymagaj bezczynnosci", uzbroic i zaznaczyc ja z powrotem przy niemierzalnej
+        # bezczynnosci - albo zmienic akcje na taka, ktorej system nie pozwala.
+        if self.armed and (refusal := arm_refusal(self.cfg)):
+            self.armed = False
+            self._render_header()
+            self._report_arm_refusal(refusal, dialog=messagebox.showwarning)
         # Zmiana ustawien w trakcie odliczania: okno pokazuje stara akcje/tryb,
         # wiec odliczanie trzeba przerwac, a nie pozwolic mu wykonac cos innego.
         if self.countdown is not None:
@@ -923,13 +932,6 @@ class ClaudeAutoShutdown:
         except OSError as exc:
             messagebox.showerror(t("settings.err_save"), str(exc))
             return
-        # Uzbrojenie sprawdzalo warunki dla STARYCH ustawien. Bez tego dalo sie odznaczyc
-        # "wymagaj bezczynnosci", uzbroic i zaznaczyc ja z powrotem przy niemierzalnej
-        # bezczynnosci - albo zmienic akcje na taka, ktorej system nie pozwala.
-        if self.armed and (refusal := arm_refusal(self.cfg)):
-            self.armed = False
-            self._render_header()
-            self._report_arm_refusal(refusal, dialog=messagebox.showwarning)
         self.monitor.reset_stability()
         self.monitor.wake()
         self.settings_status.config(text=t("settings.saved"))

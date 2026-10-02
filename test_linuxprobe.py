@@ -383,7 +383,9 @@ def test_stary_format_blokady_dalej_dziala(app_mod):
     assert app_mod.another_instance_running() == os.getpid()
 
 
-def test_zmiana_ustawien_w_stanie_uzbrojonym_sprawdza_warunki_ponownie(app_mod, monkeypatch):
+@pytest.mark.parametrize("save_fails", [False, True])
+def test_zmiana_ustawien_w_stanie_uzbrojonym_sprawdza_warunki_ponownie(app_mod, monkeypatch,
+                                                                        save_fails):
     """pg-review security: odznacz bezczynnosc -> uzbroj -> zaznacz z powrotem nie moze
     zostawic uzbrojonego programu przy niemierzalnej bezczynnosci."""
     from types import SimpleNamespace
@@ -396,7 +398,13 @@ def test_zmiana_ustawien_w_stanie_uzbrojonym_sprawdza_warunki_ponownie(app_mod, 
             return self.value
 
     shown = []
-    monkeypatch.setattr(app_mod, "save_config", lambda _cfg: None)
+
+    def save(_cfg):
+        if save_fails:  # zablokowany config.json nie moze ominac ponownego sprawdzenia
+            raise OSError("config.json zablokowany")
+
+    monkeypatch.setattr(app_mod, "save_config", save)
+    monkeypatch.setattr(app_mod.messagebox, "showerror", lambda *a: None)
     monkeypatch.setattr(app_mod.messagebox, "showwarning", lambda *a: shown.append(a))
     monkeypatch.setattr(app_mod.probe, "human_idle_seconds", lambda: -1.0)
     monkeypatch.setattr(app_mod.probe, "shutdown_capability", lambda _a: (True, ""))
