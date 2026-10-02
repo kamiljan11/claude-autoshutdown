@@ -306,9 +306,9 @@ def arm_refusal(cfg: dict, capability=None, idle_seconds=None) -> tuple[str, str
 
     Jedno miejsce dla przycisku ARM i dla arm_on_start. Sprawdza:
       * uprawnienie do WYBRANEJ akcji (sleep pyta logind o CanSuspend, nie CanPowerOff),
-      * czy bezczynnosc czlowieka da sie zmierzyc, gdy jej wymagamy. Silnik traktuje
-        nieznana bezczynnosc jako "nie blokuje" (zeby nie trzymac maszyny w nieskonczonosc),
-        wiec tu, przed uzbrojeniem, uzytkownik dowiaduje sie o tym i decyduje swiadomie.
+      * czy bezczynnosc czlowieka da sie zmierzyc, gdy jej wymagamy. Silnik i tak by
+        zablokowal akcje przy nieznanej bezczynnosci (monitor.evaluate), ale tu uzytkownik
+        dowiaduje sie o tym od razu, a nie po nocy z wiszaca blokada.
     """
     capability = capability or probe.shutdown_capability
     idle_seconds = idle_seconds or probe.human_idle_seconds
@@ -326,16 +326,21 @@ def needs_reconfirm(old: dict, new: dict) -> bool:
     """Czy zmiana ustawien uzbrojonego programu jest GROZNIEJSZA niz to, co potwierdzono
     przy uzbrajaniu - wtedy trzeba ja potwierdzic ponownie (decyzja Kamila 2026-10-02).
 
-    Grozniej = tryb prob -> bojowy, inna akcja, wymuszone zamykanie aplikacji wlaczone,
-    zdjety wymog bezczynnosci albo dopuszczone wylaczenie bez zadnej sesji. Zmiany
-    w bezpieczna strone (np. powrot do trybu prob) nie pytaja.
+    Grozniej = tryb prob -> bojowy, inna akcja, wymuszone zamykanie wlaczone, zdjety wymog
+    bezczynnosci, dopuszczone wylaczenie bez sesji, a takze kazdy prog zluzowany w dol
+    (krotsza cisza / bezczynnosc / odliczanie, mniej potwierdzen) i usuniety straznik
+    procesu. Zmiany w bezpieczna strone (np. powrot do trybu prob) nie pytaja.
     """
+    loosened_threshold = any(new[key] < old[key] for key in (
+        "quiet_seconds", "human_idle_required", "countdown_seconds", "required_polls"))
     return any((
         old["dry_run"] and not new["dry_run"],
         old["action"] != new["action"],
-        not old.get("force_close_apps", True) and new.get("force_close_apps", True),
+        not old["force_close_apps"] and new["force_close_apps"],
         old["require_human_idle"] and not new["require_human_idle"],
         not old["allow_zero_sessions"] and new["allow_zero_sessions"],
+        loosened_threshold,
+        bool(set(old["guard_patterns"]) - set(new["guard_patterns"])),
     ))
 
 
@@ -904,20 +909,20 @@ class ClaudeAutoShutdown:
                      bg=BG, fg=FG_DIM, font=(UI_FONT, 9)).grid(
                 row=row, column=0, columnspan=3, sticky="w")
 
-    def _arm_summary(self) -> str:
+    def _arm_summary(self, cfg: dict | None = None) -> str:
         """Tresc potwierdzenia uzbrojenia - ta sama przy ARM i przy grozniejszej zmianie."""
-        action_name = self.cfg["action"]
+        cfg = cfg or self.cfg
+        action_name = cfg["action"]
         label = probe.POWER_ACTIONS[action_name].label
-        mode = t("arm.mode_dry") if self.cfg["dry_run"] else t("arm.mode_live")
+        mode = t("arm.mode_dry") if cfg["dry_run"] else t("arm.mode_live")
         return (
-            t("arm.summary", label=label, mode=mode, quiet=self.cfg["quiet_seconds"],
-              polls=self.cfg["required_polls"])
-            + (t("arm.summary_idle", idle=self.cfg["human_idle_required"])
-               if self.cfg["require_human_idle"] else "")
-            + t("arm.summary_countdown", countdown=self.cfg["countdown_seconds"])
+            t("arm.summary", label=label, mode=mode, quiet=cfg["quiet_seconds"],
+              polls=cfg["required_polls"])
+            + (t("arm.summary_idle", idle=cfg["human_idle_required"])
+               if cfg["require_human_idle"] else "")
+            + t("arm.summary_countdown", countdown=cfg["countdown_seconds"])
             + (t("arm.summary_force")
-               if action_name == "shutdown" and self.cfg.get("force_close_apps", True)
-               else "")
+               if action_name == "shutdown" and cfg["force_close_apps"] else "")
             + t("arm.summary_question")
         )
 
@@ -937,8 +942,11 @@ class ClaudeAutoShutdown:
         try:
             for key in ("quiet_seconds", "poll_seconds", "required_polls",
                         "countdown_seconds", "human_idle_required"):
-                new_cfg[key] = max(1, int(float(self.vars[key].get())))
-        except ValueError:
+                # Te same granice co przy wczytaniu pliku (_INT_BOUNDS) - inaczej z
+                # formularza dalo sie ustawic np. 1 s odliczania ponizej minimum 5 s.
+                low, high = _INT_BOUNDS[key]
+                new_cfg[key] = min(high, max(low, int(float(self.vars[key].get()))))
+        except (ValueError, OverflowError):  # "abc" / "inf" / "1e999" z formularza
             messagebox.showerror(t("settings.err_numbers"), t("settings.err_numbers.body"))
             return
 
@@ -950,7 +958,15 @@ class ClaudeAutoShutdown:
         new_cfg["force_close_apps"] = bool(self.force_var.get())
         new_cfg["guard_patterns"] = [p.strip() for p in self.guard_var.get().split(",")
                                      if p.strip()]
-        old_cfg = self.cfg
+        # Grozniejsza zmiana przy uzbrojonym programie: pytamy PRZED podmiana. Dialog jest
+        # modalny, ale petla Tk i watek monitora dzialaja dalej - gdyby self.cfg bylo juz
+        # nowe, odliczanie mogloby ruszyc na niepotwierdzonych ustawieniach, zanim ktos
+        # kliknie. W trakcie dialogu obowiazuja stare, potwierdzone ustawienia.
+        reconfirm = (self.armed and arm_refusal(new_cfg) is None
+                     and needs_reconfirm(self.cfg, new_cfg))
+        confirmed = reconfirm and messagebox.askyesno(
+            t("arm.confirm_title"), t(RECONFIRM_INTRO) + self._arm_summary(new_cfg),
+            icon="warning")
         self.cfg = new_cfg
         # Zaraz po podmianie, PRZED zapisem: monitor czyta self.cfg na zywo, a nieudany
         # zapis (zablokowany config.json) konczy te funkcje wczesniej.
@@ -961,14 +977,12 @@ class ClaudeAutoShutdown:
             self.armed = False
             self._render_header()
             self._report_arm_refusal(refusal, dialog=messagebox.showwarning)
-        elif self.armed and needs_reconfirm(old_cfg, self.cfg):
-            if messagebox.askyesno(t("arm.confirm_title"),
-                                   t(RECONFIRM_INTRO) + self._arm_summary(), icon="warning"):
-                self._append_log(log_line(t(RECONFIRMED_LOG)))
-            else:
-                self.armed = False
-                self._render_header()
-                self._append_log(log_line(t(RECONFIRM_DECLINED_LOG)))
+        elif reconfirm and confirmed:
+            self._append_log(log_line(t(RECONFIRMED_LOG)))
+        elif reconfirm:
+            self.armed = False
+            self._render_header()
+            self._append_log(log_line(t(RECONFIRM_DECLINED_LOG)))
         # Zmiana ustawien w trakcie odliczania: okno pokazuje stara akcje/tryb,
         # wiec odliczanie trzeba przerwac, a nie pozwolic mu wykonac cos innego.
         if self.countdown is not None:

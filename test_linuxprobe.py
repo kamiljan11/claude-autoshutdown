@@ -414,7 +414,7 @@ def _fake_app(app_mod, cfg, **ui):
     cls = app_mod.ClaudeAutoShutdown
     fake._report_arm_refusal = lambda refusal, dialog=None: cls._report_arm_refusal(
         fake, refusal, dialog)
-    fake._arm_summary = lambda: cls._arm_summary(fake)
+    fake._arm_summary = lambda cfg=None: cls._arm_summary(fake, cfg)
     return fake
 
 
@@ -451,10 +451,17 @@ def test_zmiana_ustawien_w_stanie_uzbrojonym_sprawdza_warunki_ponownie(app_mod, 
     ({"force_close_apps": True}, True),            # wymuszone zamykanie wlaczone
     ({"require_human_idle": False}, True),         # zdjety wymog bezczynnosci
     ({"allow_zero_sessions": True}, True),         # wylaczenie bez zadnej sesji
-    ({"quiet_seconds": 900}, False),               # bezpieczniej / obojetnie
+    ({"quiet_seconds": 900}, False),               # dluzsza cisza = bezpieczniej
+    ({"quiet_seconds": 60}, True),                 # krotsza cisza
+    ({"human_idle_required": 1}, True),            # krotsza bezczynnosc
+    ({"countdown_seconds": 5}, True),              # krotsze odliczanie
+    ({"required_polls": 1}, True),                 # mniej potwierdzen
+    ({"guard_patterns": []}, True),                # usuniety straznik
+    ({"guard_patterns": ["ffmpeg", "blender"]}, False),  # dodany straznik = bezpieczniej
 ])
 def test_needs_reconfirm(app_mod, change, expected):
-    old = dict(app_mod.DEFAULT_CONFIG, dry_run=True, force_close_apps=False)
+    old = dict(app_mod.DEFAULT_CONFIG, dry_run=True, force_close_apps=False,
+               guard_patterns=["ffmpeg"])
     assert app_mod.needs_reconfirm(old, {**old, **change}) is expected
 
 
@@ -466,15 +473,23 @@ def test_powrot_do_trybu_prob_nie_pyta(app_mod):
 @pytest.mark.parametrize("answer", [True, False])
 def test_grozniejsza_zmiana_wymaga_potwierdzenia(app_mod, monkeypatch, answer):
     asked = []
+    holder = {}
+
+    def ask(*a, **_k):
+        # TOCTOU: w trakcie dialogu monitor musi widziec STARE, potwierdzone ustawienia.
+        asked.append(holder["fake"].cfg["dry_run"])
+        return answer
+
     monkeypatch.setattr(app_mod, "save_config", lambda _cfg: None)
-    monkeypatch.setattr(app_mod.messagebox, "askyesno",
-                        lambda *a, **_k: asked.append(a) or answer)
+    monkeypatch.setattr(app_mod.messagebox, "askyesno", ask)
     monkeypatch.setattr(app_mod.probe, "human_idle_seconds", lambda: 5.0)
     monkeypatch.setattr(app_mod.probe, "shutdown_capability", lambda _a: (True, ""))
     cfg = dict(app_mod.DEFAULT_CONFIG, dry_run=True)
     fake = _fake_app(app_mod, cfg, dry_run=False)
+    holder["fake"] = fake
     app_mod.ClaudeAutoShutdown.save_settings(fake)
-    assert len(asked) == 1, "tryb prob -> bojowy przy uzbrojeniu musi zapytac"
+    assert asked == [True], "pytanie PRZED podmiana - w dialogu wciaz tryb prob"
+    assert fake.cfg["dry_run"] is False
     assert fake.armed is answer, "Tak = dalej uzbrojony, Nie = rozbrojony"
 
 
@@ -488,3 +503,30 @@ def test_bezpieczna_zmiana_nie_pyta(app_mod, monkeypatch):
     fake = _fake_app(app_mod, cfg, dry_run=True)
     app_mod.ClaudeAutoShutdown.save_settings(fake)
     assert fake.armed is True
+
+
+def test_formularz_trzyma_granice_ustawien(app_mod, monkeypatch):
+    """Odliczanie 1 s z formularza = ponizej minimum 5 s z _INT_BOUNDS -> przyciete."""
+    monkeypatch.setattr(app_mod, "save_config", lambda _cfg: None)
+    monkeypatch.setattr(app_mod.messagebox, "askyesno", lambda *a, **_k: True)
+    monkeypatch.setattr(app_mod.probe, "human_idle_seconds", lambda: 5.0)
+    monkeypatch.setattr(app_mod.probe, "shutdown_capability", lambda _a: (True, ""))
+    fake = _fake_app(app_mod, dict(app_mod.DEFAULT_CONFIG))
+    fake.vars["countdown_seconds"] = _Var("1")
+    fake.vars["quiet_seconds"] = _Var("999999")
+    app_mod.ClaudeAutoShutdown.save_settings(fake)
+    assert fake.cfg["countdown_seconds"] == app_mod._INT_BOUNDS["countdown_seconds"][0]
+    assert fake.cfg["quiet_seconds"] == app_mod._INT_BOUNDS["quiet_seconds"][1]
+
+
+@pytest.mark.parametrize("raw", ["abc", "inf", "1e999", "nan"])
+def test_zla_liczba_w_formularzu_daje_komunikat_nie_wyjatek(app_mod, monkeypatch, raw):
+    shown = []
+    monkeypatch.setattr(app_mod, "save_config",
+                        lambda _cfg: pytest.fail("zla liczba nie moze trafic do pliku"))
+    monkeypatch.setattr(app_mod.messagebox, "showerror", lambda *a: shown.append(a))
+    fake = _fake_app(app_mod, dict(app_mod.DEFAULT_CONFIG))
+    before = dict(fake.cfg)
+    fake.vars["countdown_seconds"] = _Var(raw)
+    app_mod.ClaudeAutoShutdown.save_settings(fake)
+    assert shown and fake.cfg == before
