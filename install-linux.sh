@@ -45,6 +45,9 @@ EXEC_APP="${APP_DIR//%/%%}"
 if ! command -v busctl >/dev/null; then
   echo "Uwaga: brak busctl (systemd) - program nie sprawdzi uprawnien do wylaczenia." >&2
 fi
+if ! command -v xrdb >/dev/null; then
+  echo "Uwaga: brak xrdb (pakiet x11-xserver-utils) - na ekranie HiDPI okno moze byc za male." >&2
+fi
 
 write_entry() {
   local target="$1"
