@@ -55,3 +55,18 @@ def test_autostart_przed_xft_bierze_monitors_xml(monkeypatch, tmp_path):
     (tmp_path / ".config").mkdir()
     (tmp_path / ".config/monitors.xml").write_text("<scale>2</scale>")
     assert app.linux_screen_scale(wait_s=0) == 2.0
+
+
+def test_bez_waylanda_nie_czeka(monkeypatch, tmp_path):
+    """CI (Xvfb) nie ma Xft.dpi - start GUI nie moze czekac 8 s (test GUI end-to-end by padl)."""
+    import time
+
+    class R:
+        stdout = ""
+    monkeypatch.setattr(app.sys, "platform", "linux")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(app.subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(app.Path, "home", lambda: tmp_path)
+    t0 = time.monotonic()
+    assert app.linux_screen_scale() == 1.0
+    assert time.monotonic() - t0 < 1.0

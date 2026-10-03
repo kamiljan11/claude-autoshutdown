@@ -108,6 +108,10 @@ def linux_screen_scale(wait_s: float = 8.0) -> float:
     """
     if not sys.platform.startswith("linux"):
         return 1.0
+    # Wyscig z gsd-xsettings wystepuje tylko w sesji GNOME na Waylandzie (XWayland). Gdzie indziej
+    # (Xvfb w CI, czysty X11) Xft.dpi moze nigdy nie powstac - tam nie czekamy ani chwili.
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        wait_s = 0.0
     deadline = time.monotonic() + wait_s
     while True:
         try:
