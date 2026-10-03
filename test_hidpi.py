@@ -26,6 +26,7 @@ def test_linux_czyta_xrdb(monkeypatch):
     class R:
         stdout = "Xft.dpi:\t192\n"
     monkeypatch.setattr(app.sys, "platform", "linux")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setattr(app.subprocess, "run", lambda *a, **k: R())
     assert app.linux_screen_scale() == 2.0
 
@@ -70,3 +71,65 @@ def test_bez_waylanda_nie_czeka(monkeypatch, tmp_path):
     t0 = time.monotonic()
     assert app.linux_screen_scale() == 1.0
     assert time.monotonic() - t0 < 1.0
+
+
+class _Clock:
+    """Falszywy zegar: sleep przesuwa czas, test nie czeka naprawde."""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def now(self):
+        return self.t
+
+    def sleep(self, s):
+        self.t += s
+
+
+def _gnome_wayland(monkeypatch, tmp_path):
+    monkeypatch.setattr(app.sys, "platform", "linux")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "ubuntu:GNOME")
+    monkeypatch.setattr(app.Path, "home", lambda: tmp_path)
+
+
+def test_autostart_czeka_az_gnome_poda_xft(monkeypatch, tmp_path):
+    _gnome_wayland(monkeypatch, tmp_path)
+    answers = iter(["", "", "Xft.antialias:\t1\n", "Xft.dpi:\t192\n"])
+    monkeypatch.setattr(app, "_xrdb_query", lambda: next(answers))
+    clock = _Clock()
+    assert app.screen_scale_info(sleep=clock.sleep, now=clock.now) == (2.0, "Xft.dpi")
+    assert clock.t == 3 * app.XFT_POLL_S  # trzy pauzy, potem trafienie - nie czeka do konca limitu
+
+
+def test_gnome_bez_xft_po_limicie_bierze_monitors(monkeypatch, tmp_path):
+    _gnome_wayland(monkeypatch, tmp_path)
+    (tmp_path / ".config").mkdir()
+    (tmp_path / ".config/monitors.xml").write_text("<logicalmonitor><scale>2</scale><primary>yes</primary></logicalmonitor>")
+    monkeypatch.setattr(app, "_xrdb_query", lambda: "")
+    clock = _Clock()
+    assert app.screen_scale_info(sleep=clock.sleep, now=clock.now) == (2.0, "monitors.xml")
+    assert app.XFT_WAIT_S <= clock.t <= app.XFT_WAIT_S + app.XFT_POLL_S
+
+
+def test_brak_xrdb_nie_czeka_nawet_w_gnome(monkeypatch, tmp_path):
+    _gnome_wayland(monkeypatch, tmp_path)
+    monkeypatch.setattr(app, "_xrdb_query", lambda: None)
+    clock = _Clock()
+    assert app.screen_scale_info(sleep=clock.sleep, now=clock.now) == (1.0, "domyslna")
+    assert clock.t == 0
+
+
+def test_kde_wayland_nie_czeka(monkeypatch, tmp_path):
+    _gnome_wayland(monkeypatch, tmp_path)
+    monkeypatch.setenv("XDG_CURRENT_DESKTOP", "KDE")
+    monkeypatch.setattr(app, "_xrdb_query", lambda: "")
+    clock = _Clock()
+    app.screen_scale_info(sleep=clock.sleep, now=clock.now)
+    assert clock.t == 0
+
+
+def test_monitors_glowny_wygrywa_ze_starym_ukladem():
+    xml = ("<monitors><configuration><logicalmonitor><scale>1</scale><primary>yes</primary></logicalmonitor>"
+           "</configuration><configuration><logicalmonitor><scale>2</scale></logicalmonitor></configuration></monitors>")
+    assert app.parse_monitors_scale(xml) == 1.0

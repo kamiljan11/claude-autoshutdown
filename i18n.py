@@ -20,6 +20,7 @@ ARM_IDLE_UNKNOWN = "arm.idle_unknown_body"
 RECONFIRM_INTRO = "arm.reconfirm_intro"
 RECONFIRM_DECLINED_LOG = "log.reconfirm_declined"
 RECONFIRMED_LOG = "log.reconfirmed"
+SCREEN_SCALE_LOG = "log.screen_scale"
 
 _current = DEFAULT_LANGUAGE
 
@@ -330,6 +331,7 @@ STRINGS: dict[str, dict[str, str]] = {
                      "user idle {idle}s)",
         "log.mode_dry": "dry run",
         "log.mode_live": "LIVE MODE",
+        SCREEN_SCALE_LOG: "Screen scale {scale} (source: {source})",
         "log.autoarm_env": "AUTOARM: armed without confirmation (CLAUDE_AUTOSHUTDOWN_AUTOARM=1) "
                            "- end-to-end test mode",
         "log.autoarm_cfg": "Armed automatically at start (arm_on_start=true) - action: {action}, "
@@ -572,6 +574,7 @@ STRINGS: dict[str, dict[str, str]] = {
                      "bezczynnosc {idle}s)",
         "log.mode_dry": "tryb prob",
         "log.mode_live": "TRYB BOJOWY",
+        SCREEN_SCALE_LOG: "Skala ekranu {scale} (zrodlo: {source})",
         "log.autoarm_env": "AUTOARM: uzbrojono bez potwierdzenia (CLAUDE_AUTOSHUTDOWN_AUTOARM=1) "
                            "- tryb testu koncowego",
         "log.autoarm_cfg": "Uzbrojono automatycznie przy starcie (arm_on_start=true) - akcja: "

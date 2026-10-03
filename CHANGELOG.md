@@ -17,6 +17,10 @@ this file starts at the point it was introduced, so earlier history lives in the
 - Arming checks the permission for the chosen action, not always for shutdown.
 
 ### Fixed
+- Linux HiDPI follow-up (department review): the 8 s wait for `Xft.dpi` now happens only on a
+  GNOME Wayland session and stops at once when `xrdb` is missing; the `monitors.xml` fallback
+  prefers the primary monitor over old layouts; the chosen scale and its source go to the log;
+  the wait loop is covered by tests with a fake clock; the installer warns when `xrdb` is absent.
 - Tiny window on Linux HiDPI (200% scale under XWayland): Tk now reads `Xft.dpi` from
   `xrdb` and scales itself (`linux_screen_scale`, `test_hidpi.py`). At autostart, before GNOME
   publishes `Xft.dpi`, it waits up to 8 s and then falls back to `~/.config/monitors.xml`.
