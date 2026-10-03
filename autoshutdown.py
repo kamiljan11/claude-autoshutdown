@@ -18,6 +18,7 @@ import ctypes
 import json
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -70,6 +71,35 @@ def enable_dpi_awareness() -> None:
         ctypes.windll.user32.SetProcessDPIAware()
     except (AttributeError, OSError):
         pass
+
+
+def parse_xft_scale(xrdb_output: str) -> float:
+    """Skala ekranu z `xrdb -query` (Xft.dpi = 96 x skala). Brak/blad -> 1.0."""
+    for line in xrdb_output.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "Xft.dpi":
+            try:
+                dpi = float(value.strip())
+            except ValueError:
+                return 1.0
+            return dpi / 96.0 if dpi > 0 else 1.0
+    return 1.0
+
+
+def linux_screen_scale() -> float:
+    """Na Linuksie (GNOME z xwayland-native-scaling) Tk widzi 96 DPI, choc ekran ma np. 200%.
+
+    GNOME podaje prawdziwe DPI aplikacjom X11 w Xft.dpi - czytamy je, zeby okno nie bylo
+    o polowe za male. Brak xrdb albo X11 -> 1.0 (bez zmian).
+    """
+    if not sys.platform.startswith("linux"):
+        return 1.0
+    try:
+        out = subprocess.run(["xrdb", "-query"], capture_output=True, text=True, timeout=5,
+                             check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return 1.0
+    return parse_xft_scale(out)
 
 
 # Katalog stanu (config, log, plik STOP). Domyslnie obok programu; nadpisywalny,
@@ -566,6 +596,11 @@ class ClaudeAutoShutdown:
         self.root = tk.Tk(className=WM_CLASS)
         # Wszystkie rozmiary podajemy logicznie i mnozymy przez skale monitora.
         self.dpi = self.root.winfo_fpixels("1i") / 96.0
+        hidpi = linux_screen_scale()
+        if hidpi > self.dpi:
+            # Czcionki w punktach skaluje `tk scaling` (piksele na punkt), geometrie - px().
+            self.root.tk.call("tk", "scaling", 96.0 * hidpi / 72.0)
+            self.dpi = hidpi
         self.root.title("Claude AutoShutdown")
         self._set_window_icon()
         # Rozmiar startowy przyciety do ekranu: na malym laptopie okno 1400x820

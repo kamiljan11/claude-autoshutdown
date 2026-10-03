@@ -17,6 +17,8 @@ this file starts at the point it was introduced, so earlier history lives in the
 - Arming checks the permission for the chosen action, not always for shutdown.
 
 ### Fixed
+- Tiny window on Linux HiDPI (200% scale under XWayland): Tk now reads `Xft.dpi` from
+  `xrdb` and scales itself (`linux_screen_scale`, `test_hidpi.py`).
 - A native-CLI session on Linux (`~/.local/share/claude/versions/<ver>`) would have been
   treated as dead: liveness now looks for "claude" in the full executable path.
 - Arming (button and `arm_on_start`) is refused when "Require user to be idle" is on but idle
