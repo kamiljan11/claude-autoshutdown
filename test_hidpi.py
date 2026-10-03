@@ -105,7 +105,8 @@ def test_autostart_czeka_az_gnome_poda_xft(monkeypatch, tmp_path):
 def test_gnome_bez_xft_po_limicie_bierze_monitors(monkeypatch, tmp_path):
     _gnome_wayland(monkeypatch, tmp_path)
     (tmp_path / ".config").mkdir()
-    (tmp_path / ".config/monitors.xml").write_text("<logicalmonitor><scale>2</scale><primary>yes</primary></logicalmonitor>")
+    (tmp_path / ".config/monitors.xml").write_text(
+        "<logicalmonitor><scale>2</scale><primary>yes</primary></logicalmonitor>")
     monkeypatch.setattr(app, "_xrdb_query", lambda: "")
     clock = _Clock()
     assert app.screen_scale_info(sleep=clock.sleep, now=clock.now) == (2.0, "monitors.xml")
@@ -129,10 +130,27 @@ def test_kde_wayland_nie_czeka(monkeypatch, tmp_path):
     assert clock.t == 0
 
 
-def test_monitors_glowny_wygrywa_ze_starym_ukladem():
-    xml = ("<monitors><configuration><logicalmonitor><scale>1</scale><primary>yes</primary></logicalmonitor>"
-           "</configuration><configuration><logicalmonitor><scale>2</scale></logicalmonitor></configuration></monitors>")
-    assert app.parse_monitors_scale(xml) == 1.0
+def _cfg(connectors: list[str], scale: float) -> str:
+    specs = "".join(f"<monitor><monitorspec><connector>{c}</connector></monitorspec></monitor>"
+                    for c in connectors)
+    return (f"<configuration><logicalmonitor><scale>{scale}</scale><primary>yes</primary>{specs}"
+            "</logicalmonitor></configuration>")
+
+
+def test_monitors_bierze_uklad_podlaczonych_ekranow():
+    # dwa uklady, kazdy z wlasnym monitorem glownym: sam laptop 1x, laptop + dok 2x
+    xml = "<monitors>" + _cfg(["eDP-1"], 1) + _cfg(["eDP-1", "HDMI-A-1"], 2) + "</monitors>"
+    assert app.parse_monitors_scale(xml, {"eDP-1"}) == 1.0
+    assert app.parse_monitors_scale(xml, {"eDP-1", "HDMI-A-1"}) == 2.0
+    assert app.parse_monitors_scale(xml, {"DP-3"}) == 2.0  # brak dopasowania -> najwieksza
+
+
+def test_zlacza_z_sysfs(tmp_path):
+    for name, status in (("card1-eDP-1", "connected"), ("card1-HDMI-A-1", "disconnected"),
+                         ("card1-Writeback-1", "unknown")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "status").write_text(status + "\n")
+    assert app.connected_connectors(tmp_path) == {"eDP-1"}
 
 
 def test_zepsuty_monitors_xml_nie_wywraca_startu(monkeypatch, tmp_path):

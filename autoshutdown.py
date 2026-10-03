@@ -95,46 +95,72 @@ XFT_POLL_S = 0.5
 XRDB_TIMEOUT_S = 2.0
 
 
-def parse_monitors_scale(monitors_xml: str) -> float:
-    """Skala z ~/.config/monitors.xml: monitor glowny (<primary>yes</primary>), inaczej najwieksza.
+def _positive_scales(xml: str) -> list[float]:
+    out = []
+    for raw in re.findall(r"<scale>\s*([0-9.]+)\s*</scale>", xml):
+        try:
+            value = float(raw)
+        except ValueError:
+            continue
+        if value > 0:
+            out.append(value)
+    return out
 
-    GNOME trzyma tam tez stare uklady (np. dok z zewnetrznym ekranem), wiec monitor glowny
-    jest lepsza wskazowka niz maksimum ze wszystkiego. Brak -> 1.0.
+
+def parse_monitors_scale(monitors_xml: str, connected: set[str] | None = None) -> float:
+    """Skala z ~/.config/monitors.xml dla ukladu pasujacego do podlaczonych ekranow.
+
+    GNOME trzyma tam po jednej <configuration> na kazdy zestaw monitorow (np. sam laptop / laptop
+    z dokiem), kazda z wlasnym <primary>. Wybieramy te, ktorej zlacza (<connector>) to dokladnie
+    `connected`, i z niej skale monitora glownego. Bez dopasowania - najwieksza skala. Brak -> 1.0.
     """
-    def scales(xml: str) -> list[float]:
-        out = []
-        for raw in re.findall(r"<scale>\s*([0-9.]+)\s*</scale>", xml):
-            try:
-                value = float(raw)
-            except ValueError:
-                continue
-            if value > 0:
-                out.append(value)
-        return out
+    configs = re.findall(r"<configuration>(.*?)</configuration>", monitors_xml, re.DOTALL)
+    if connected:
+        for cfg in configs:
+            if set(re.findall(r"<connector>\s*([^<\s]+)\s*</connector>", cfg)) == connected:
+                blocks = re.findall(r"<logicalmonitor>(.*?)</logicalmonitor>", cfg, re.DOTALL)
+                primary = [v for b in blocks if re.search(r"<primary>\s*yes\s*</primary>", b)
+                           for v in _positive_scales(b)]
+                scales = primary or _positive_scales(cfg)
+                if scales:
+                    return max(scales)
+    return max(_positive_scales(monitors_xml), default=1.0)
 
-    blocks = re.findall(r"<logicalmonitor>(.*?)</logicalmonitor>", monitors_xml, re.DOTALL)
-    primary = [v for b in blocks if re.search(r"<primary>\s*yes\s*</primary>", b) for v in scales(b)]
-    return max(primary or scales(monitors_xml), default=1.0)
+
+def connected_connectors(drm: Path = Path("/sys/class/drm")) -> set[str]:
+    """Nazwy podlaczonych zlaczy (np. {"eDP-1", "HDMI-A-1"}) z /sys/class/drm/card*-*/status."""
+    found = set()
+    for status in drm.glob("card*-*/status"):
+        try:
+            if status.read_text().strip() == "connected":
+                found.add(status.parent.name.split("-", 1)[1])
+        except OSError:
+            continue
+    return found
 
 
 def _xrdb_query() -> str | None:
-    """Wynik `xrdb -query`; None tylko gdy xrdb nie ma (stan trwaly). Timeout = "" (przejsciowy, czekamy dalej)."""
+    """Wynik `xrdb -query`.
+
+    None tylko gdy xrdb nie ma (stan trwaly). Timeout = "" (przejsciowy - czekamy dalej).
+    """
     try:
-        return subprocess.run(["xrdb", "-query"], capture_output=True, text=True, timeout=XRDB_TIMEOUT_S,
-                              check=False).stdout
+        return subprocess.run(["xrdb", "-query"], capture_output=True, text=True,
+                              timeout=XRDB_TIMEOUT_S, check=False).stdout
     except subprocess.TimeoutExpired:
         return ""  # XWayland jeszcze wstaje przy logowaniu
     except OSError:
         return None
 
 
-def screen_scale_info(wait_s: float = XFT_WAIT_S, sleep=time.sleep, now=time.monotonic) -> tuple[float, str]:
-    """(skala, zrodlo). Na Linuksie (GNOME z xwayland-native-scaling) Tk widzi 96 DPI, choc ekran ma np. 200%.
+def screen_scale_info(wait_s: float = XFT_WAIT_S, sleep=time.sleep,
+                      now=time.monotonic) -> tuple[float, str]:
+    """(skala, zrodlo). Na Linuksie (GNOME, xwayland-native-scaling) Tk widzi 96 DPI przy 200%.
 
     GNOME podaje prawdziwe DPI aplikacjom X11 w Xft.dpi. Przy autostarcie zaraz po zalogowaniu
-    Xft.dpi jeszcze nie istnieje (gsd-xsettings ustawia je chwile pozniej; zaobserwowane 2026-10-03),
-    wiec TYLKO w sesji GNOME na Waylandzie czekamy do `wait_s`. Gdzie indziej (Xvfb w CI, KDE, czysty
-    X11) albo bez xrdb - zero czekania. Na koniec skala z monitors.xml albo 1.0.
+    Xft.dpi jeszcze nie istnieje (gsd-xsettings ustawia je chwile pozniej; widziane 2026-10-03),
+    wiec TYLKO w sesji GNOME na Waylandzie czekamy do `wait_s`. Gdzie indziej (Xvfb w CI, KDE,
+    czysty X11) albo bez xrdb - zero czekania. Na koniec skala z monitors.xml albo 1.0.
     """
     if not sys.platform.startswith("linux"):
         return 1.0, "nie-Linux"
@@ -152,7 +178,8 @@ def screen_scale_info(wait_s: float = XFT_WAIT_S, sleep=time.sleep, now=time.mon
             break
         sleep(XFT_POLL_S)
     try:
-        return parse_monitors_scale((Path.home() / ".config/monitors.xml").read_text(errors="replace")), "monitors.xml"
+        xml = (Path.home() / ".config/monitors.xml").read_text(errors="replace")
+        return parse_monitors_scale(xml, connected_connectors()), "monitors.xml"
     except OSError:
         return 1.0, "domyslna"
 
@@ -681,7 +708,8 @@ class ClaudeAutoShutdown:
             action=probe.POWER_ACTIONS[self.cfg["action"]].label,
             quiet=self.cfg["quiet_seconds"], idle=self.cfg["human_idle_required"])))
         # Diagnoza "okno za male/za duze" bez debuggera: jaka skala i skad.
-        self._append_log(log_line(t(SCREEN_SCALE_LOG, scale=f"{self.dpi:g}", source=self._scale_source)))
+        self._append_log(log_line(t(SCREEN_SCALE_LOG, scale=f"{self.dpi:g}",
+                                    source=self._scale_source)))
 
         if AUTOARM:
             self.armed = True
