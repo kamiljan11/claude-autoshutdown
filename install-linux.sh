@@ -30,6 +30,18 @@ if ! "$PYTHON" -c "import tkinter" 2>/dev/null; then
   echo "Brak Tkintera. Zainstaluj: sudo apt install python3-tk" >&2
   exit 1
 fi
+# Desktop Entry Spec: w Exec= cudzyslow, `, $, \ trzeba escapowac, a % to kod pola.
+# Zamiast kruchego escapowania odrzucamy takie sciezki - % zamieniamy na %%.
+for value in "$APP_DIR" "$PYTHON"; do
+  if [[ "$value" == *[\"\`\$\\]* || "$value" == *$'\n'* ]]; then
+    echo "Sciezka zawiera znak niedozwolony w skrocie .desktop (\" \` \$ \\ lub nowa linia): $value" >&2
+    echo "Przenies program do katalogu bez tych znakow." >&2
+    exit 1
+  fi
+done
+EXEC_PYTHON="${PYTHON//%/%%}"
+EXEC_APP="${APP_DIR//%/%%}"
+
 if ! command -v busctl >/dev/null; then
   echo "Uwaga: brak busctl (systemd) - program nie sprawdzi uprawnien do wylaczenia." >&2
 fi
@@ -44,7 +56,7 @@ Version=1.5
 Name=Claude AutoShutdown
 Comment=Shut down only after every Claude Code session has finished
 Comment[pl]=Wylacza komputer dopiero gdy wszystkie sesje Claude Code skoncza prace
-Exec="$PYTHON" "$APP_DIR/autoshutdown.py"
+Exec="$EXEC_PYTHON" "$EXEC_APP/autoshutdown.py"
 Path=$APP_DIR
 Icon=$APP_DIR/assets/icon.png
 Terminal=false

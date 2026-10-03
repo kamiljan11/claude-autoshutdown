@@ -14,6 +14,10 @@ LANGUAGES: dict[str, str] = {"en": "English", "pl": "Polski"}
 DEFAULT_LANGUAGE = "en"
 AUTO = "auto"  # wartosc w config.json: "wez jezyk systemu, jesli go mamy"
 
+# Klucze, do ktorych kod siega z kilku miejsc - jedno zrodlo zamiast kopii napisu.
+ARM_REFUSED_LOG = "log.arm_refused"
+ARM_IDLE_UNKNOWN = "arm.idle_unknown_body"
+
 _current = DEFAULT_LANGUAGE
 
 
@@ -257,6 +261,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "arm.refused_title": "Cannot arm",
         "arm.refused_body": "The action '{label}' needs the shutdown privilege and the system "
                             "denies it:\n\n{why}\n\nChoose another action in Settings.",
+        ARM_IDLE_UNKNOWN: "User idle time cannot be measured on this desktop, so the "
+                                 "'user idle' condition would let the action run while you "
+                                 "work.\n\nInstall xprintidle (X11) or use GNOME, or untick "
+                                 "'Require user to be idle' in Settings if that is what you want.",
         "arm.mode_dry": "DRY RUN - nothing will happen",
         "arm.mode_live": "WILL REALLY EXECUTE THE ACTION",
         "arm.summary": "Action: {label}\nMode: {mode}\n\nConditions:\n"
@@ -323,7 +331,7 @@ STRINGS: dict[str, dict[str, str]] = {
                            "dry run: {dry}",
         "log.settings_saved": "Settings saved: {cfg}",
         "log.disarmed": "DISARMED (manually)",
-        "log.arm_refused": "Arming refused - missing privilege: {why}",
+        ARM_REFUSED_LOG: "Arming refused: {why}",
         "log.armed": "ARMED - action={action}, dry_run={dry}",
         "log.scanner_warning": "Scanner warning: {error}",
         "log.monitor_error": "Monitor thread error: {error}",
@@ -495,6 +503,10 @@ STRINGS: dict[str, dict[str, str]] = {
         "arm.refused_title": "Nie moge uzbroic",
         "arm.refused_body": "Akcja '{label}' wymaga przywileju wylaczania, a system go odmawia:"
                             "\n\n{why}\n\nWybierz inna akcje w Ustawieniach.",
+        ARM_IDLE_UNKNOWN: "Na tym pulpicie nie da sie zmierzyc bezczynnosci uzytkownika, "
+                                 "wiec warunek 'uzytkownik nieaktywny' przepuscilby akcje w trakcie "
+                                 "Twojej pracy.\n\nZainstaluj xprintidle (X11) albo uzyj GNOME, "
+                                 "albo swiadomie odznacz 'Wymagaj bezczynnosci uzytkownika' w Ustawieniach.",
         "arm.mode_dry": "TRYB PROB - nic sie nie stanie",
         "arm.mode_live": "NAPRAWDE WYKONA AKCJE",
         "arm.summary": "Akcja: {label}\nTryb: {mode}\n\nWarunki:\n"
@@ -557,7 +569,7 @@ STRINGS: dict[str, dict[str, str]] = {
                            "{action}, tryb prob: {dry}",
         "log.settings_saved": "Ustawienia zapisane: {cfg}",
         "log.disarmed": "ROZBROJONY (recznie)",
-        "log.arm_refused": "Odmowa uzbrojenia - brak uprawnien: {why}",
+        ARM_REFUSED_LOG: "Odmowa uzbrojenia: {why}",
         "log.armed": "UZBROJONY - akcja={action}, dry_run={dry}",
         "log.scanner_warning": "Uwaga skanera: {error}",
         "log.monitor_error": "Blad watku monitora: {error}",

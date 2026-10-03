@@ -279,3 +279,151 @@ def test_jezyk_z_zmiennych_srodowiska(monkeypatch, env, expected):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     assert system_language() == expected
+
+
+# --------------------------------------------------------------------------- #
+# claude_code_pids: filtr sciezek sesji (pg-review code-2)
+# --------------------------------------------------------------------------- #
+def _fake_proc(root, pid, exe, start=1000):
+    d = root / str(pid)
+    d.mkdir()
+    (d / "stat").write_text(f"{pid} (x) S 1 1 1 0 -1 0 0 0 0 0 1 1 0 0 20 0 1 0 {start} 1 1",
+                            encoding="utf-8")
+    (d / "exe").symlink_to(exe)  # wiszacy link wystarczy - czytamy tylko readlink
+
+
+def test_claude_code_pids_tylko_binarki_sesji(monkeypatch, tmp_path):
+    monkeypatch.setattr(linuxprobe, "PROC_ROOT", tmp_path)
+    monkeypatch.setattr(linuxprobe, "IS_LINUX", True)
+    _fake_proc(tmp_path, 10, "/home/u/.config/Claude/claude-code/2.1.280/claude")   # desktop
+    _fake_proc(tmp_path, 11, "/home/u/.local/share/claude/versions/2.1.283")       # CLI
+    _fake_proc(tmp_path, 12, "/usr/lib/claude-desktop/claude")                      # Electron
+    _fake_proc(tmp_path, 13, "/usr/bin/python3.14")
+    (tmp_path / "self").mkdir()                                                     # nie-PID
+    assert linuxprobe.claude_code_pids() == [10, 11]
+
+
+def test_claude_code_pids_bez_proc_to_pusto(monkeypatch, tmp_path):
+    monkeypatch.setattr(linuxprobe, "PROC_ROOT", tmp_path / "nie-ma")
+    assert linuxprobe.claude_code_pids() == []
+
+
+# --------------------------------------------------------------------------- #
+# uzbrajanie: uprawnienie do WYBRANEJ akcji + mierzalna bezczynnosc (code-1, security-1)
+# --------------------------------------------------------------------------- #
+@pytest.fixture
+def app_mod(tmp_path, monkeypatch):
+    import importlib
+    monkeypatch.setenv("CLAUDE_AUTOSHUTDOWN_HOME", str(tmp_path))
+    sys.modules.pop("autoshutdown", None)
+    yield importlib.import_module("autoshutdown")
+    sys.modules.pop("autoshutdown", None)
+
+
+def _cfg(**over):
+    return {"action": "sleep", "require_human_idle": True, **over}
+
+
+def test_uzbrajanie_pyta_o_wybrana_akcje(app_mod):
+    asked = []
+    refusal = app_mod.arm_refusal(_cfg(), capability=lambda a: asked.append(a) or (True, ""),
+                                  idle_seconds=lambda: 5.0)
+    assert refusal is None
+    assert asked == ["sleep"], "sleep musi pytac o swoja akcje, nie o shutdown"
+
+
+def test_odmowa_gdy_akcja_niedozwolona(app_mod):
+    refusal = app_mod.arm_refusal(_cfg(action="hibernate"),
+                                  capability=lambda _a: (False, "CanHibernate = no"),
+                                  idle_seconds=lambda: 5.0)
+    assert refusal == ("arm.refused_body", "CanHibernate = no")
+
+
+def test_odmowa_gdy_bezczynnosc_nieznana_a_wymagana(app_mod):
+    refusal = app_mod.arm_refusal(_cfg(), capability=lambda _a: (True, ""),
+                                  idle_seconds=lambda: -1.0)
+    assert refusal is not None and refusal[0] == app_mod.ARM_IDLE_UNKNOWN
+
+
+def test_bez_wymogu_bezczynnosci_nieznana_nie_blokuje(app_mod):
+    assert app_mod.arm_refusal(_cfg(require_human_idle=False), capability=lambda _a: (True, ""),
+                               idle_seconds=lambda: -1.0) is None
+
+
+def test_lock_nie_wola_uprawnien(app_mod):
+    def boom(_a):
+        raise AssertionError("lock nie potrzebuje uprawnien")
+
+    assert app_mod.arm_refusal(_cfg(action="lock"), capability=boom,
+                               idle_seconds=lambda: 5.0) is None
+
+
+# --------------------------------------------------------------------------- #
+# blokada instancji po restarcie (data-1)
+# --------------------------------------------------------------------------- #
+@LINUX_ONLY
+def test_blokada_z_innego_bootu_to_smiec(app_mod):
+    info = linuxprobe.probe_process(os.getpid())
+    app_mod.LOCK_FILE.write_text(f"{os.getpid()} {info.created_filetime} inny-boot",
+                                 encoding="utf-8")
+    assert app_mod.another_instance_running() is None
+
+
+@LINUX_ONLY
+def test_blokada_z_tego_bootu_wykrywa_zywa_instancje(app_mod):
+    app_mod.claim_instance_lock()
+    assert len(app_mod.LOCK_FILE.read_text(encoding="utf-8").split()) == 3
+    assert app_mod.another_instance_running() == os.getpid()
+
+
+@LINUX_ONLY
+def test_stary_format_blokady_dalej_dziala(app_mod):
+    info = linuxprobe.probe_process(os.getpid())
+    app_mod.LOCK_FILE.write_text(f"{os.getpid()} {info.created_filetime}", encoding="utf-8")
+    assert app_mod.another_instance_running() == os.getpid()
+
+
+@pytest.mark.parametrize("save_fails", [False, True])
+def test_zmiana_ustawien_w_stanie_uzbrojonym_sprawdza_warunki_ponownie(app_mod, monkeypatch,
+                                                                        save_fails):
+    """pg-review security: odznacz bezczynnosc -> uzbroj -> zaznacz z powrotem nie moze
+    zostawic uzbrojonego programu przy niemierzalnej bezczynnosci."""
+    from types import SimpleNamespace
+
+    class Var:
+        def __init__(self, value):
+            self.value = value
+
+        def get(self):
+            return self.value
+
+    shown = []
+
+    def save(_cfg):
+        if save_fails:  # zablokowany config.json nie moze ominac ponownego sprawdzenia
+            raise OSError("config.json zablokowany")
+
+    monkeypatch.setattr(app_mod, "save_config", save)
+    monkeypatch.setattr(app_mod.messagebox, "showerror", lambda *a: None)
+    monkeypatch.setattr(app_mod.messagebox, "showwarning", lambda *a: shown.append(a))
+    monkeypatch.setattr(app_mod.probe, "human_idle_seconds", lambda: -1.0)
+    monkeypatch.setattr(app_mod.probe, "shutdown_capability", lambda _a: (True, ""))
+    cfg = dict(app_mod.DEFAULT_CONFIG, require_human_idle=False)
+    fake = SimpleNamespace(
+        cfg=cfg, armed=True, countdown=None,
+        vars={k: Var(str(cfg[k])) for k in ("quiet_seconds", "poll_seconds", "required_polls",
+                                             "countdown_seconds", "human_idle_required")},
+        action_box=Var("shutdown - x"), dry_var=Var(True), human_var=Var(True),
+        zero_var=Var(False), armstart_var=Var(False), force_var=Var(True), guard_var=Var(""),
+        monitor=SimpleNamespace(reset_stability=lambda: None, wake=lambda: None),
+        settings_status=SimpleNamespace(config=lambda **_k: None),
+        root=SimpleNamespace(after=lambda *_a: None),
+        _append_log=lambda _line: None, _render_header=lambda: None,
+    )
+    fake._report_arm_refusal = (
+        lambda refusal, dialog=None: app_mod.ClaudeAutoShutdown._report_arm_refusal(
+            fake, refusal, dialog))
+    app_mod.ClaudeAutoShutdown.save_settings(fake)
+    assert fake.cfg["require_human_idle"] is True
+    assert fake.armed is False, "niemierzalna bezczynnosc + wymog = rozbrojenie"
+    assert shown, "uzytkownik musi dostac komunikat, czemu program sie rozbroil"

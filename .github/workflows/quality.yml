@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: windows-latest
@@ -31,7 +34,7 @@ jobs:
           python-version: "3.14"
       - name: Install test tooling
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb desktop-file-utils
           python -m pip install --upgrade pip pytest ruff
       - name: Lint
         run: python -m ruff check .
@@ -39,8 +42,21 @@ jobs:
         run: python -m pytest -q
       - name: End-to-end run on a synthetic environment (GUI under Xvfb)
         run: xvfb-run -a python ultimate_test.py
-      - name: Installer syntax
-        run: bash -n install-linux.sh
+      - name: Installer really installs (sandboxed HOME) and writes valid shortcuts
+        run: |
+          bash -n install-linux.sh
+          sandbox="$RUNNER_TEMP/home"
+          mkdir -p "$sandbox"
+          HOME="$sandbox" XDG_DATA_HOME="$sandbox/share" XDG_CONFIG_HOME="$sandbox/cfg" \
+            ./install-linux.sh --autostart
+          for f in "$sandbox/share/applications" "$sandbox/Desktop" "$sandbox/cfg/autostart"; do
+            desktop-file-validate "$f/claude-autoshutdown.desktop"
+          done
+          HOME="$sandbox" XDG_DATA_HOME="$sandbox/share" XDG_CONFIG_HOME="$sandbox/cfg" \
+            ./install-linux.sh --uninstall
+          for f in "$sandbox/share/applications" "$sandbox/Desktop" "$sandbox/cfg/autostart"; do
+            test ! -e "$f/claude-autoshutdown.desktop"
+          done
 
   build-exe:
     needs: test

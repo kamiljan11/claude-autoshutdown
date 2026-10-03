@@ -290,7 +290,8 @@ the machine down mid-run.
 - Linux: hibernation is off on most distributions (logind answers `CanHibernate = no`); the
   Settings tab shows what logind allows and arming refuses an action it would reject.
 - Linux: on a desktop other than GNOME, user idle time needs `xprintidle` (X11). Without it the
-  idle time is unknown, which — as on Windows — does not block shutdown.
+  idle time is unknown, and arming is refused while "Require user to be idle" is on — untick it
+  deliberately if you accept that the action may run while you work.
 - No installer on Windows; a shortcut script on Linux.
 
 ## Keywords

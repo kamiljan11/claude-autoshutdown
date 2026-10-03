@@ -45,5 +45,13 @@ Measured on that machine before writing code (Claude Code 2.1.280):
   is documented at the top of `linuxprobe.py` instead.
 - The liveness check is slightly looser on Windows (path instead of name). The start-time
   match still has to pass, so a recycled PID is still rejected.
-- Idle time on non-GNOME desktops needs `xprintidle`; without it idle is unknown, which the
-  engine already treats as "does not block" on both systems.
+- Idle time on non-GNOME desktops needs `xprintidle`; without it idle is unknown. The engine
+  keeps treating unknown idle as "does not block" (a machine must not stay on forever because
+  of a measurement gap), so the decision moves to arming: `arm_refusal()` refuses to arm —
+  from the button and from `arm_on_start` — while "Require user to be idle" is on and idle
+  cannot be measured. The user either fixes the measurement or unticks the option knowingly
+  (pg-review 2026-10-02, security-1).
+- Process start time on Linux is relative to boot, so the instance lock also stores
+  `/proc/sys/kernel/random/boot_id`; a lock from a previous boot is ignored even if PID and
+  start ticks happen to match (pg-review 2026-10-02, data-1).
+- macOS is out of scope: no logind / systemd, and no session registry measurements.

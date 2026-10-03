@@ -49,3 +49,8 @@ def process_names() -> set[str] | None:
 def claude_code_pids() -> list[int]:
     """PID-y sesji Claude Code wedlug systemu operacyjnego."""
     return backend.claude_code_pids()
+
+
+def boot_id() -> str:
+    """Identyfikator biezacego startu systemu ('' gdy niepotrzebny albo nieznany)."""
+    return backend.boot_id()
