@@ -118,11 +118,13 @@ def parse_monitors_scale(monitors_xml: str) -> float:
 
 
 def _xrdb_query() -> str | None:
-    """Wynik `xrdb -query`; None, gdy xrdb nie ma albo nie odpowiada (wtedy nie ma na co czekac)."""
+    """Wynik `xrdb -query`; None tylko gdy xrdb nie ma (stan trwaly). Timeout = "" (przejsciowy, czekamy dalej)."""
     try:
         return subprocess.run(["xrdb", "-query"], capture_output=True, text=True, timeout=XRDB_TIMEOUT_S,
                               check=False).stdout
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        return ""  # XWayland jeszcze wstaje przy logowaniu
+    except OSError:
         return None
 
 
@@ -150,13 +152,9 @@ def screen_scale_info(wait_s: float = XFT_WAIT_S, sleep=time.sleep, now=time.mon
             break
         sleep(XFT_POLL_S)
     try:
-        return parse_monitors_scale((Path.home() / ".config/monitors.xml").read_text()), "monitors.xml"
+        return parse_monitors_scale((Path.home() / ".config/monitors.xml").read_text(errors="replace")), "monitors.xml"
     except OSError:
         return 1.0, "domyslna"
-
-
-def linux_screen_scale(wait_s: float = XFT_WAIT_S) -> float:
-    return screen_scale_info(wait_s)[0]
 
 
 # Katalog stanu (config, log, plik STOP). Domyslnie obok programu; nadpisywalny,
@@ -653,11 +651,13 @@ class ClaudeAutoShutdown:
         self.root = tk.Tk(className=WM_CLASS)
         # Wszystkie rozmiary podajemy logicznie i mnozymy przez skale monitora.
         self.dpi = self.root.winfo_fpixels("1i") / DPI_BASE
-        hidpi, self._scale_source = screen_scale_info()
+        hidpi, source = screen_scale_info()
+        self._scale_source = "Tk"  # w logu zrodlo tej skali, ktora naprawde wygrala
         if hidpi > self.dpi:
             # Czcionki w punktach skaluje `tk scaling` (piksele na punkt), geometrie - px().
             self.root.tk.call("tk", "scaling", DPI_BASE * hidpi / POINTS_PER_INCH)
             self.dpi = hidpi
+            self._scale_source = source
         self.root.title("Claude AutoShutdown")
         self._set_window_icon()
         # Rozmiar startowy przyciety do ekranu: na malym laptopie okno 1400x820

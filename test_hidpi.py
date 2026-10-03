@@ -19,7 +19,7 @@ def test_brak_lub_smieci_to_bez_zmian():
 
 def test_poza_linuksem_bez_xrdb(monkeypatch):
     monkeypatch.setattr(app.sys, "platform", "win32")
-    assert app.linux_screen_scale() == 1.0
+    assert app.screen_scale_info()[0] == 1.0
 
 
 def test_linux_czyta_xrdb(monkeypatch):
@@ -28,7 +28,7 @@ def test_linux_czyta_xrdb(monkeypatch):
     monkeypatch.setattr(app.sys, "platform", "linux")
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setattr(app.subprocess, "run", lambda *a, **k: R())
-    assert app.linux_screen_scale() == 2.0
+    assert app.screen_scale_info()[0] == 2.0
 
 
 def test_brak_xrdb_nie_wywraca(monkeypatch, tmp_path):
@@ -37,7 +37,7 @@ def test_brak_xrdb_nie_wywraca(monkeypatch, tmp_path):
     monkeypatch.setattr(app.sys, "platform", "linux")
     monkeypatch.setattr(app.subprocess, "run", boom)
     monkeypatch.setattr(app.Path, "home", lambda: tmp_path)  # bez monitors.xml
-    assert app.linux_screen_scale(wait_s=0) == 1.0
+    assert app.screen_scale_info(wait_s=0)[0] == 1.0
 
 
 def test_skala_z_monitors_xml():
@@ -55,7 +55,7 @@ def test_autostart_przed_xft_bierze_monitors_xml(monkeypatch, tmp_path):
     monkeypatch.setattr(app.Path, "home", lambda: tmp_path)
     (tmp_path / ".config").mkdir()
     (tmp_path / ".config/monitors.xml").write_text("<scale>2</scale>")
-    assert app.linux_screen_scale(wait_s=0) == 2.0
+    assert app.screen_scale_info(wait_s=0)[0] == 2.0
 
 
 def test_bez_waylanda_nie_czeka(monkeypatch, tmp_path):
@@ -69,7 +69,7 @@ def test_bez_waylanda_nie_czeka(monkeypatch, tmp_path):
     monkeypatch.setattr(app.subprocess, "run", lambda *a, **k: R())
     monkeypatch.setattr(app.Path, "home", lambda: tmp_path)
     t0 = time.monotonic()
-    assert app.linux_screen_scale() == 1.0
+    assert app.screen_scale_info()[0] == 1.0
     assert time.monotonic() - t0 < 1.0
 
 
@@ -133,3 +133,25 @@ def test_monitors_glowny_wygrywa_ze_starym_ukladem():
     xml = ("<monitors><configuration><logicalmonitor><scale>1</scale><primary>yes</primary></logicalmonitor>"
            "</configuration><configuration><logicalmonitor><scale>2</scale></logicalmonitor></configuration></monitors>")
     assert app.parse_monitors_scale(xml) == 1.0
+
+
+def test_zepsuty_monitors_xml_nie_wywraca_startu(monkeypatch, tmp_path):
+    monkeypatch.setattr(app.sys, "platform", "linux")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(app, "_xrdb_query", lambda: "")
+    monkeypatch.setattr(app.Path, "home", lambda: tmp_path)
+    (tmp_path / ".config").mkdir()
+    (tmp_path / ".config/monitors.xml").write_bytes(b"<scale>2</scale>\xff\xfe")
+    assert app.screen_scale_info() == (2.0, "monitors.xml")
+
+
+def test_timeout_xrdb_to_nie_brak_programu(monkeypatch):
+    def slow(*a, **k):
+        raise app.subprocess.TimeoutExpired("xrdb", 2)
+    monkeypatch.setattr(app.subprocess, "run", slow)
+    assert app._xrdb_query() == ""      # przejsciowe - petla czeka dalej
+
+    def missing(*a, **k):
+        raise FileNotFoundError("xrdb")
+    monkeypatch.setattr(app.subprocess, "run", missing)
+    assert app._xrdb_query() is None    # trwale - bez czekania
