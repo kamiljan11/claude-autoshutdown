@@ -17,6 +17,9 @@ AUTO = "auto"  # wartosc w config.json: "wez jezyk systemu, jesli go mamy"
 # Klucze, do ktorych kod siega z kilku miejsc - jedno zrodlo zamiast kopii napisu.
 ARM_REFUSED_LOG = "log.arm_refused"
 ARM_IDLE_UNKNOWN = "arm.idle_unknown_body"
+RECONFIRM_INTRO = "arm.reconfirm_intro"
+RECONFIRM_DECLINED_LOG = "log.reconfirm_declined"
+RECONFIRMED_LOG = "log.reconfirmed"
 
 _current = DEFAULT_LANGUAGE
 
@@ -261,6 +264,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "arm.refused_title": "Cannot arm",
         "arm.refused_body": "The action '{label}' needs the shutdown privilege and the system "
                             "denies it:\n\n{why}\n\nChoose another action in Settings.",
+        RECONFIRM_INTRO: "The program is ARMED and these settings make it more dangerous.\n"
+                         "Confirm them, or it will disarm.\n\n",
         ARM_IDLE_UNKNOWN: "User idle time cannot be measured on this desktop, so the "
                                  "'user idle' condition would let the action run while you "
                                  "work.\n\nInstall xprintidle (X11) or use GNOME, or untick "
@@ -332,6 +337,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "log.settings_saved": "Settings saved: {cfg}",
         "log.disarmed": "DISARMED (manually)",
         ARM_REFUSED_LOG: "Arming refused: {why}",
+        RECONFIRM_DECLINED_LOG: "Riskier settings saved while armed were not confirmed - disarmed",
+        RECONFIRMED_LOG: "Riskier settings confirmed while armed",
         "log.armed": "ARMED - action={action}, dry_run={dry}",
         "log.scanner_warning": "Scanner warning: {error}",
         "log.monitor_error": "Monitor thread error: {error}",
@@ -503,6 +510,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "arm.refused_title": "Nie moge uzbroic",
         "arm.refused_body": "Akcja '{label}' wymaga przywileju wylaczania, a system go odmawia:"
                             "\n\n{why}\n\nWybierz inna akcje w Ustawieniach.",
+        RECONFIRM_INTRO: "Program jest UZBROJONY, a te ustawienia sa grozniejsze.\n"
+                         "Potwierdz je albo program sie rozbroi.\n\n",
         ARM_IDLE_UNKNOWN: "Na tym pulpicie nie da sie zmierzyc bezczynnosci uzytkownika, "
                                  "wiec warunek 'uzytkownik nieaktywny' przepuscilby akcje w trakcie "
                                  "Twojej pracy.\n\nZainstaluj xprintidle (X11) albo uzyj GNOME, "
@@ -570,6 +579,8 @@ STRINGS: dict[str, dict[str, str]] = {
         "log.settings_saved": "Ustawienia zapisane: {cfg}",
         "log.disarmed": "ROZBROJONY (recznie)",
         ARM_REFUSED_LOG: "Odmowa uzbrojenia: {why}",
+        RECONFIRM_DECLINED_LOG: "Grozniejsze ustawienia przy uzbrojonym programie niepotwierdzone - rozbrojono",
+        RECONFIRMED_LOG: "Potwierdzono grozniejsze ustawienia przy uzbrojonym programie",
         "log.armed": "UZBROJONY - akcja={action}, dry_run={dry}",
         "log.scanner_warning": "Uwaga skanera: {error}",
         "log.monitor_error": "Blad watku monitora: {error}",

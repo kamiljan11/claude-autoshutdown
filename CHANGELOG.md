@@ -22,6 +22,10 @@ this file starts at the point it was introduced, so earlier history lives in the
 - Arming (button and `arm_on_start`) is refused when "Require user to be idle" is on but idle
   time cannot be measured (non-GNOME Linux without `xprintidle`); `arm_on_start` now also
   checks the action's permission, which it previously skipped.
+- **Unknown user idle now blocks the action** (was: "does not block") while "Require user to be
+  idle" is on, on both systems; the block lifts when the measurement returns.
+- Saving riskier settings while armed (dry run -> live, another action, force-close on, idle
+  requirement off, zero sessions allowed) asks for the arming confirmation again; "No" disarms.
 - Saving settings while armed re-checks the arming conditions and disarms with a message when
   they no longer hold (closes "untick idle, arm, tick it back" and switching to a forbidden
   action while armed). CI workflow token is now read-only (`permissions: contents: read`).

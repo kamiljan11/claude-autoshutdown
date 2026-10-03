@@ -473,7 +473,10 @@ def evaluate(
         ))
 
     if require_human_idle:
-        idle_ok = human_idle < 0 or human_idle >= human_idle_required
+        # Nieznana bezczynnosc (-1) BLOKUJE (decyzja Kamila 2026-10-02): akcja ma reagowac
+        # na rzeczywisty stan komputera, a brak pomiaru to nie dowod, ze nikt nie pracuje.
+        # Blokada znika sama, gdy pomiar wroci.
+        idle_ok = human_idle >= 0 and human_idle >= human_idle_required
         checks.append((
             t("check.human_idle", s=int(human_idle_required)),
             idle_ok,

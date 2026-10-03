@@ -100,9 +100,15 @@ def test_aktywny_uzytkownik_blokuje():
     assert not verdict.ok
 
 
-def test_nieznana_bezczynnosc_uzytkownika_nie_blokuje():
-    """human_idle < 0 = nie umiemy zmierzyc; nie blokujemy w nieskonczonosc."""
+def test_nieznana_bezczynnosc_uzytkownika_blokuje():
+    """human_idle < 0 = nie umiemy zmierzyc -> blokada (decyzja 2026-10-02, ADR 0003)."""
     verdict = evaluate([make_session()], **{**BASE_ARGS, "human_idle": -1.0})
+    assert not verdict.ok
+
+
+def test_nieznana_bezczynnosc_bez_wymogu_nie_blokuje():
+    verdict = evaluate([make_session()], **{**BASE_ARGS, "human_idle": -1.0,
+                                            "require_human_idle": False})
     assert verdict.ok
 
 
