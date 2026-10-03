@@ -1,5 +1,16 @@
 """Skalowanie okna na Linuksie: Xft.dpi z GNOME -> skala Tk."""
+import pytest
+
 import autoshutdown as app
+
+REAL_CONNECTED_CONNECTORS = app.connected_connectors  # przed podmiana w fixture
+
+
+@pytest.fixture(autouse=True)
+def bez_prawdziwych_ekranow(monkeypatch):
+    """Testy nie czytaja /sys/class/drm ani zmiennej wymuszajacej skale z sesji dewelopera."""
+    monkeypatch.setattr(app, "connected_connectors", lambda drm=None: set())
+    monkeypatch.delenv(app.SCALE_ENV, raising=False)
 
 
 def test_xft_200_procent():
@@ -109,7 +120,7 @@ def test_gnome_bez_xft_po_limicie_bierze_monitors(monkeypatch, tmp_path):
         "<logicalmonitor><scale>2</scale><primary>yes</primary></logicalmonitor>")
     monkeypatch.setattr(app, "_xrdb_query", lambda: "")
     clock = _Clock()
-    assert app.screen_scale_info(sleep=clock.sleep, now=clock.now) == (2.0, "monitors.xml")
+    assert app.screen_scale_info(sleep=clock.sleep, now=clock.now) == (2.0, app.GUESSED_SOURCE)
     assert app.XFT_WAIT_S <= clock.t <= app.XFT_WAIT_S + app.XFT_POLL_S
 
 
@@ -150,7 +161,7 @@ def test_zlacza_z_sysfs(tmp_path):
                          ("card1-Writeback-1", "unknown")):
         (tmp_path / name).mkdir()
         (tmp_path / name / "status").write_text(status + "\n")
-    assert app.connected_connectors(tmp_path) == {"eDP-1"}
+    assert REAL_CONNECTED_CONNECTORS(tmp_path) == {"eDP-1"}
 
 
 def test_zepsuty_monitors_xml_nie_wywraca_startu(monkeypatch, tmp_path):
@@ -160,7 +171,7 @@ def test_zepsuty_monitors_xml_nie_wywraca_startu(monkeypatch, tmp_path):
     monkeypatch.setattr(app.Path, "home", lambda: tmp_path)
     (tmp_path / ".config").mkdir()
     (tmp_path / ".config/monitors.xml").write_bytes(b"<scale>2</scale>\xff\xfe")
-    assert app.screen_scale_info() == (2.0, "monitors.xml")
+    assert app.screen_scale_info() == (2.0, app.GUESSED_SOURCE)
 
 
 def test_timeout_xrdb_to_nie_brak_programu(monkeypatch):
@@ -173,3 +184,20 @@ def test_timeout_xrdb_to_nie_brak_programu(monkeypatch):
         raise FileNotFoundError("xrdb")
     monkeypatch.setattr(app.subprocess, "run", missing)
     assert app._xrdb_query() is None    # trwale - bez czekania
+
+
+def test_wymuszona_skala_bez_czekania(monkeypatch):
+    monkeypatch.setenv("CLAUDE_AUTOSHUTDOWN_SCALE", "1.5")
+    def no_xrdb():
+        raise AssertionError("nie pytac xrdb")
+    monkeypatch.setattr(app, "_xrdb_query", no_xrdb)
+    assert app.screen_scale_info() == (1.5, "CLAUDE_AUTOSHUTDOWN_SCALE")
+    monkeypatch.setenv("CLAUDE_AUTOSHUTDOWN_SCALE", "abc")  # zla wartosc -> zwykla detekcja
+    monkeypatch.setattr(app.sys, "platform", "win32")
+    assert app.screen_scale_info() == (1.0, "nie-Linux")
+
+
+def test_log_odroznia_trafiony_uklad_od_zgadnietego():
+    xml = "<monitors>" + _cfg(["eDP-1"], 1) + _cfg(["eDP-1", "HDMI-A-1"], 2) + "</monitors>"
+    assert app.monitors_scale_info(xml, {"eDP-1"}) == (1.0, True)
+    assert app.monitors_scale_info(xml, {"DP-3"}) == (2.0, False)

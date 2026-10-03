@@ -93,6 +93,8 @@ POINTS_PER_INCH = 72.0    # `tk scaling` = piksele na punkt typograficzny
 XFT_WAIT_S = 8.0          # ile czekac na Xft.dpi przy starcie sesji GNOME/Wayland
 XFT_POLL_S = 0.5
 XRDB_TIMEOUT_S = 2.0
+GUESSED_SOURCE = "monitors.xml (brak pasujacego ukladu - najwieksza)"
+SCALE_ENV = "CLAUDE_AUTOSHUTDOWN_SCALE"  # np. 2 - wymusza skale okna (gdy autodetekcja zawodzi)
 
 
 def _positive_scales(xml: str) -> list[float]:
@@ -107,13 +109,8 @@ def _positive_scales(xml: str) -> list[float]:
     return out
 
 
-def parse_monitors_scale(monitors_xml: str, connected: set[str] | None = None) -> float:
-    """Skala z ~/.config/monitors.xml dla ukladu pasujacego do podlaczonych ekranow.
-
-    GNOME trzyma tam po jednej <configuration> na kazdy zestaw monitorow (np. sam laptop / laptop
-    z dokiem), kazda z wlasnym <primary>. Wybieramy te, ktorej zlacza (<connector>) to dokladnie
-    `connected`, i z niej skale monitora glownego. Bez dopasowania - najwieksza skala. Brak -> 1.0.
-    """
+def monitors_scale_info(monitors_xml: str, connected: set[str] | None = None) -> tuple[float, bool]:
+    """(skala, czy uklad pasowal do podlaczonych ekranow) - patrz parse_monitors_scale."""
     configs = re.findall(r"<configuration>(.*?)</configuration>", monitors_xml, re.DOTALL)
     if connected:
         for cfg in configs:
@@ -123,8 +120,18 @@ def parse_monitors_scale(monitors_xml: str, connected: set[str] | None = None) -
                            for v in _positive_scales(b)]
                 scales = primary or _positive_scales(cfg)
                 if scales:
-                    return max(scales)
-    return max(_positive_scales(monitors_xml), default=1.0)
+                    return max(scales), True
+    return max(_positive_scales(monitors_xml), default=1.0), False
+
+
+def parse_monitors_scale(monitors_xml: str, connected: set[str] | None = None) -> float:
+    """Skala z ~/.config/monitors.xml dla ukladu pasujacego do podlaczonych ekranow.
+
+    GNOME trzyma tam po jednej <configuration> na kazdy zestaw monitorow (np. sam laptop / laptop
+    z dokiem), kazda z wlasnym <primary>. Wybieramy te, ktorej zlacza (<connector>) to dokladnie
+    `connected`, i z niej skale monitora glownego. Bez dopasowania - najwieksza skala. Brak -> 1.0.
+    """
+    return monitors_scale_info(monitors_xml, connected)[0]
 
 
 def connected_connectors(drm: Path = Path("/sys/class/drm")) -> set[str]:
@@ -162,6 +169,13 @@ def screen_scale_info(wait_s: float = XFT_WAIT_S, sleep=time.sleep,
     wiec TYLKO w sesji GNOME na Waylandzie czekamy do `wait_s`. Gdzie indziej (Xvfb w CI, KDE,
     czysty X11) albo bez xrdb - zero czekania. Na koniec skala z monitors.xml albo 1.0.
     """
+    forced = os.environ.get(SCALE_ENV, "").strip()
+    if forced:
+        try:
+            if float(forced) > 0:
+                return float(forced), SCALE_ENV  # recznie wymuszona - bez czekania i zgadywania
+        except ValueError:
+            pass  # zla wartosc - dalej jak zwykle (zrodlo w logu pokaze, co wygralo)
     if not sys.platform.startswith("linux"):
         return 1.0, "nie-Linux"
     gnome = "GNOME" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
@@ -179,7 +193,8 @@ def screen_scale_info(wait_s: float = XFT_WAIT_S, sleep=time.sleep,
         sleep(XFT_POLL_S)
     try:
         xml = (Path.home() / ".config/monitors.xml").read_text(errors="replace")
-        return parse_monitors_scale(xml, connected_connectors()), "monitors.xml"
+        scale, exact = monitors_scale_info(xml, connected_connectors())
+        return scale, "monitors.xml" if exact else GUESSED_SOURCE
     except OSError:
         return 1.0, "domyslna"
 

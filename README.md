@@ -231,7 +231,7 @@ Needs `python3` ≥ 3.14 with Tkinter (`sudo apt install python3-tk` if missing)
 runtime: shutdown, suspend and lock go through logind, which lets the logged-in user do them
 without a password. On a HiDPI screen the window size comes from `Xft.dpi` (`xrdb`, package
 `x11-xserver-utils`), falling back to `~/.config/monitors.xml`; the chosen scale and its source
-are written to the log. `./install-linux.sh --uninstall` removes the shortcuts. Everything else
+are written to the log; `CLAUDE_AUTOSHUTDOWN_SCALE=2` forces a scale. `./install-linux.sh --uninstall` removes the shortcuts. Everything else
 works as on Windows — same UI, same config, same safety gates.
 
 It starts **disarmed and in dry-run mode**. To make it actually shut down, untick "Dry run" in
