@@ -18,6 +18,8 @@ import ctypes
 import json
 import os
 import queue
+import re
+import subprocess
 import sys
 import threading
 import time
@@ -70,6 +72,62 @@ def enable_dpi_awareness() -> None:
         ctypes.windll.user32.SetProcessDPIAware()
     except (AttributeError, OSError):
         pass
+
+
+def parse_xft_scale(xrdb_output: str) -> float:
+    """Skala ekranu z `xrdb -query` (Xft.dpi = 96 x skala). Brak/blad -> 1.0."""
+    for line in xrdb_output.splitlines():
+        key, _, value = line.partition(":")
+        if key.strip() == "Xft.dpi":
+            try:
+                dpi = float(value.strip())
+            except ValueError:
+                return 1.0
+            return dpi / 96.0 if dpi > 0 else 1.0
+    return 1.0
+
+
+def parse_monitors_scale(monitors_xml: str) -> float:
+    """Najwieksza skala z ~/.config/monitors.xml (GNOME zapisuje tam <scale>2</scale>). Brak -> 1.0."""
+    scales = []
+    for raw in re.findall(r"<scale>\s*([0-9.]+)\s*</scale>", monitors_xml):
+        try:
+            scales.append(float(raw))
+        except ValueError:
+            continue
+    return max([s for s in scales if s > 0], default=1.0)
+
+
+def linux_screen_scale(wait_s: float = 8.0) -> float:
+    """Na Linuksie (GNOME z xwayland-native-scaling) Tk widzi 96 DPI, choc ekran ma np. 200%.
+
+    GNOME podaje prawdziwe DPI aplikacjom X11 w Xft.dpi - czytamy je, zeby okno nie bylo
+    o polowe za male. Przy autostarcie zaraz po zalogowaniu Xft.dpi jeszcze nie istnieje
+    (gsd-xsettings ustawia je chwile pozniej; zaobserwowane 2026-10-03), wiec czekamy do
+    `wait_s`, a potem bierzemy skale z monitors.xml. Poza Linuksem -> 1.0.
+    """
+    if not sys.platform.startswith("linux"):
+        return 1.0
+    # Wyscig z gsd-xsettings wystepuje tylko w sesji GNOME na Waylandzie (XWayland). Gdzie indziej
+    # (Xvfb w CI, czysty X11) Xft.dpi moze nigdy nie powstac - tam nie czekamy ani chwili.
+    if not os.environ.get("WAYLAND_DISPLAY"):
+        wait_s = 0.0
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            out = subprocess.run(["xrdb", "-query"], capture_output=True, text=True, timeout=5,
+                                 check=False).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            out = ""
+        if "Xft.dpi" in out:
+            return parse_xft_scale(out)
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
+    try:
+        return parse_monitors_scale((Path.home() / ".config/monitors.xml").read_text())
+    except OSError:
+        return 1.0
 
 
 # Katalog stanu (config, log, plik STOP). Domyslnie obok programu; nadpisywalny,
@@ -566,6 +624,11 @@ class ClaudeAutoShutdown:
         self.root = tk.Tk(className=WM_CLASS)
         # Wszystkie rozmiary podajemy logicznie i mnozymy przez skale monitora.
         self.dpi = self.root.winfo_fpixels("1i") / 96.0
+        hidpi = linux_screen_scale()
+        if hidpi > self.dpi:
+            # Czcionki w punktach skaluje `tk scaling` (piksele na punkt), geometrie - px().
+            self.root.tk.call("tk", "scaling", 96.0 * hidpi / 72.0)
+            self.dpi = hidpi
         self.root.title("Claude AutoShutdown")
         self._set_window_icon()
         # Rozmiar startowy przyciety do ekranu: na malym laptopie okno 1400x820
