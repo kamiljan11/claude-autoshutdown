@@ -30,9 +30,28 @@ def test_linux_czyta_xrdb(monkeypatch):
     assert app.linux_screen_scale() == 2.0
 
 
-def test_brak_xrdb_nie_wywraca(monkeypatch):
+def test_brak_xrdb_nie_wywraca(monkeypatch, tmp_path):
     def boom(*a, **k):
         raise FileNotFoundError("xrdb")
     monkeypatch.setattr(app.sys, "platform", "linux")
     monkeypatch.setattr(app.subprocess, "run", boom)
-    assert app.linux_screen_scale() == 1.0
+    monkeypatch.setattr(app.Path, "home", lambda: tmp_path)  # bez monitors.xml
+    assert app.linux_screen_scale(wait_s=0) == 1.0
+
+
+def test_skala_z_monitors_xml():
+    xml = "<monitors><configuration><logicalmonitor><scale>2</scale></logicalmonitor>" \
+          "<logicalmonitor><scale>1.25</scale></logicalmonitor></configuration></monitors>"
+    assert app.parse_monitors_scale(xml) == 2.0
+    assert app.parse_monitors_scale("<monitors/>") == 1.0
+
+
+def test_autostart_przed_xft_bierze_monitors_xml(monkeypatch, tmp_path):
+    class R:
+        stdout = "Xft.antialias:\t1\n"  # gsd-xsettings jeszcze nie ustawil Xft.dpi
+    monkeypatch.setattr(app.sys, "platform", "linux")
+    monkeypatch.setattr(app.subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(app.Path, "home", lambda: tmp_path)
+    (tmp_path / ".config").mkdir()
+    (tmp_path / ".config/monitors.xml").write_text("<scale>2</scale>")
+    assert app.linux_screen_scale(wait_s=0) == 2.0

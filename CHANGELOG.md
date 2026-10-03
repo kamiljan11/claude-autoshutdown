@@ -18,7 +18,8 @@ this file starts at the point it was introduced, so earlier history lives in the
 
 ### Fixed
 - Tiny window on Linux HiDPI (200% scale under XWayland): Tk now reads `Xft.dpi` from
-  `xrdb` and scales itself (`linux_screen_scale`, `test_hidpi.py`).
+  `xrdb` and scales itself (`linux_screen_scale`, `test_hidpi.py`). At autostart, before GNOME
+  publishes `Xft.dpi`, it waits up to 8 s and then falls back to `~/.config/monitors.xml`.
 - A native-CLI session on Linux (`~/.local/share/claude/versions/<ver>`) would have been
   treated as dead: liveness now looks for "claude" in the full executable path.
 - Arming (button and `arm_on_start`) is refused when "Require user to be idle" is on but idle

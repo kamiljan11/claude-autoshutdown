@@ -18,6 +18,7 @@ import ctypes
 import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -86,20 +87,43 @@ def parse_xft_scale(xrdb_output: str) -> float:
     return 1.0
 
 
-def linux_screen_scale() -> float:
+def parse_monitors_scale(monitors_xml: str) -> float:
+    """Najwieksza skala z ~/.config/monitors.xml (GNOME zapisuje tam <scale>2</scale>). Brak -> 1.0."""
+    scales = []
+    for raw in re.findall(r"<scale>\s*([0-9.]+)\s*</scale>", monitors_xml):
+        try:
+            scales.append(float(raw))
+        except ValueError:
+            continue
+    return max([s for s in scales if s > 0], default=1.0)
+
+
+def linux_screen_scale(wait_s: float = 8.0) -> float:
     """Na Linuksie (GNOME z xwayland-native-scaling) Tk widzi 96 DPI, choc ekran ma np. 200%.
 
     GNOME podaje prawdziwe DPI aplikacjom X11 w Xft.dpi - czytamy je, zeby okno nie bylo
-    o polowe za male. Brak xrdb albo X11 -> 1.0 (bez zmian).
+    o polowe za male. Przy autostarcie zaraz po zalogowaniu Xft.dpi jeszcze nie istnieje
+    (gsd-xsettings ustawia je chwile pozniej; zaobserwowane 2026-10-03), wiec czekamy do
+    `wait_s`, a potem bierzemy skale z monitors.xml. Poza Linuksem -> 1.0.
     """
     if not sys.platform.startswith("linux"):
         return 1.0
+    deadline = time.monotonic() + wait_s
+    while True:
+        try:
+            out = subprocess.run(["xrdb", "-query"], capture_output=True, text=True, timeout=5,
+                                 check=False).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            out = ""
+        if "Xft.dpi" in out:
+            return parse_xft_scale(out)
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.5)
     try:
-        out = subprocess.run(["xrdb", "-query"], capture_output=True, text=True, timeout=5,
-                             check=False).stdout
-    except (OSError, subprocess.TimeoutExpired):
+        return parse_monitors_scale((Path.home() / ".config/monitors.xml").read_text())
+    except OSError:
         return 1.0
-    return parse_xft_scale(out)
 
 
 # Katalog stanu (config, log, plik STOP). Domyslnie obok programu; nadpisywalny,
