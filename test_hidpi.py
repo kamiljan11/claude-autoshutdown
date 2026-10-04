@@ -192,9 +192,10 @@ def test_wymuszona_skala_bez_czekania(monkeypatch):
         raise AssertionError("nie pytac xrdb")
     monkeypatch.setattr(app, "_xrdb_query", no_xrdb)
     assert app.screen_scale_info() == (1.5, "CLAUDE_AUTOSHUTDOWN_SCALE")
-    monkeypatch.setenv("CLAUDE_AUTOSHUTDOWN_SCALE", "abc")  # zla wartosc -> zwykla detekcja
+    monkeypatch.setenv("CLAUDE_AUTOSHUTDOWN_SCALE", "abc")  # zla wartosc -> zwykla detekcja + slad w zrodle
     monkeypatch.setattr(app.sys, "platform", "win32")
-    assert app.screen_scale_info() == (1.0, "nie-Linux")
+    scale, source = app.screen_scale_info()
+    assert (scale, source.split(";")[0]) == (1.0, "nie-Linux") and "odrzucona" in source
 
 
 def test_log_odroznia_trafiony_uklad_od_zgadnietego():
@@ -207,7 +208,9 @@ def test_log_odroznia_trafiony_uklad_od_zgadnietego():
 def test_forced_scale_out_of_range_is_ignored(monkeypatch, raw):
     monkeypatch.setenv(app.SCALE_ENV, raw)
     monkeypatch.setattr(app.sys, "platform", "win32")
-    assert app.screen_scale_info(wait_s=0) == (1.0, "nie-Linux")
+    scale, source = app.screen_scale_info(wait_s=0)
+    assert scale == 1.0
+    assert source.startswith("nie-Linux; ") and "odrzucona" in source and raw.strip() in source
 
 
 @pytest.mark.parametrize("raw,expected", [("2", 2.0), ("0.5", 0.5), ("4", 4.0), (" 1.25 ", 1.25)])
@@ -218,5 +221,9 @@ def test_forced_scale_in_range_wins(monkeypatch, raw, expected):
 
 def test_choose_window_scale_logs_the_winner():
     assert app.choose_window_scale(1.0, 2.0, "Xft.dpi") == (2.0, "Xft.dpi", True)
-    assert app.choose_window_scale(2.0, 1.0, "domyslna") == (2.0, "Tk", False)
-    assert app.choose_window_scale(1.5, 1.5, "Xft.dpi") == (1.5, "Tk", False)
+    assert app.choose_window_scale(2.0, 1.0, "domyslna") == (2.0, "Tk (ekran 1: domyslna)", False)
+    assert app.choose_window_scale(1.5, 1.5, "Xft.dpi") == (1.5, "Tk (ekran 1.5: Xft.dpi)", False)
+
+
+def test_forced_scale_wins_also_downwards():
+    assert app.choose_window_scale(2.0, 0.75, app.SCALE_ENV) == (0.75, app.SCALE_ENV, True)

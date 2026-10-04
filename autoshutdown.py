@@ -133,11 +133,12 @@ def monitors_scale_info(monitors_xml: str, connected: set[str] | None = None) ->
 
 
 def choose_window_scale(tk_scale: float, screen_scale: float, source: str) -> tuple[float, str, bool]:
-    """(skala okna, zrodlo do logu, czy ustawic `tk scaling`). Wygrywa wieksza z: tego, co widzi Tk,
-    i skali ekranu (Xft.dpi / monitors.xml / zmienna). Zrodlo w logu = ta, ktora naprawde wygrala."""
-    if screen_scale > tk_scale:
+    """(skala okna, zrodlo do logu, czy ustawic `tk scaling`). Skala wymuszona zmienna wygrywa zawsze
+    (takze w dol); inaczej wieksza z: tego, co widzi Tk, i skali ekranu (Xft.dpi / monitors.xml).
+    Zrodlo w logu = ta, ktora naprawde wygrala; gdy Tk, w nawiasie przegrana skala ekranu i jej zrodlo."""
+    if source == SCALE_ENV or screen_scale > tk_scale:
         return screen_scale, source, True
-    return tk_scale, "Tk", False
+    return tk_scale, f"Tk (ekran {screen_scale:g}: {source})", False
 
 
 def connected_connectors(drm: Path = Path("/sys/class/drm")) -> set[str]:
@@ -176,16 +177,21 @@ def screen_scale_info(wait_s: float = XFT_WAIT_S, sleep=time.sleep,
     czysty X11) albo bez xrdb - zero czekania. Na koniec skala z monitors.xml albo 1.0.
     """
     forced = os.environ.get(SCALE_ENV, "").strip()
-    if forced:
-        try:
-            value = float(forced)
-        except ValueError:
-            value = 0.0
-        if math.isfinite(value) and FORCED_SCALE_MIN <= value <= FORCED_SCALE_MAX:
-            return value, SCALE_ENV  # recznie wymuszona - bez czekania i zgadywania
-        # Zla wartosc - dalej jak zwykle; zrodlo w logu pokaze, co wygralo zamiast niej.
-        print(f"{SCALE_ENV}={forced!r} poza zakresem {FORCED_SCALE_MIN}-{FORCED_SCALE_MAX} - ignoruje",
-              file=sys.stderr)
+    if not forced:
+        return _detected_scale(wait_s, sleep, now)
+    try:
+        value = float(forced)
+    except ValueError:
+        value = 0.0
+    if math.isfinite(value) and FORCED_SCALE_MIN <= value <= FORCED_SCALE_MAX:
+        return value, SCALE_ENV  # recznie wymuszona - bez czekania i zgadywania
+    # Zla wartosc - autodetekcja; odrzucenie widac w zrodle (log aplikacji), bo przy autostarcie nie ma konsoli.
+    scale, source = _detected_scale(wait_s, sleep, now)
+    return scale, f"{source}; {SCALE_ENV}={forced!r} odrzucona (zakres {FORCED_SCALE_MIN:g}-{FORCED_SCALE_MAX:g})"
+
+
+def _detected_scale(wait_s: float, sleep, now) -> tuple[float, str]:
+    """Autodetekcja skali (bez zmiennej): Xft.dpi z czekaniem tylko w GNOME/Wayland, potem monitors.xml."""
     if not sys.platform.startswith("linux"):
         return 1.0, "nie-Linux"
     gnome = "GNOME" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
