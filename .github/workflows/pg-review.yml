@@ -144,7 +144,11 @@ jobs:
           # RC tylko dla znanych wartosci odrzucenia; null/nieznany werdykt = INFRA (r11: flake formatu nie zamyka PR na stale).
           odrzucenie = werdykt in ('REQUEST_CHANGES', 'CHANGES_REQUESTED', 'REJECT', 'REJECTED')
           if odrzucenie or (not isinstance(obj, dict) and re.search(r'\bREQUEST_CHANGES\b', surowy)):
-              koniec('REQUEST_CHANGES', 'recenzent odrzucil zmiane (zapisane niezaleznie od formatu i kompletnosci wyniku)')
+              # Czlowiek musi widziec POWOD odrzucenia (pilot 2026-10-04: podsumowanie bez findings) — lista albo surowy wynik.
+              fs = obj.get('findings') if isinstance(obj, dict) and isinstance(obj.get('findings'), list) else []
+              powody = '\n'.join(f"- **{f.get('severity')}** `{f.get('rule_id')}` {f.get('file')}:{f.get('line')} — {str(f.get('claim', ''))[:500]}"
+                                 for f in fs if isinstance(f, dict)) or surowy[:3000]
+              koniec('REQUEST_CHANGES', f'recenzent odrzucil zmiane (zapisane niezaleznie od formatu i kompletnosci wyniku)\n\n{powody}')
           if not isinstance(obj, dict):
               koniec('INFRA', 'wynik recenzenta nie zaczyna sie od obiektu JSON')
           if int(out.get('num_turns') or 0) < 2:
