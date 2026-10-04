@@ -17,6 +17,9 @@ this file starts at the point it was introduced, so earlier history lives in the
 - Arming checks the permission for the chosen action, not always for shutdown.
 
 ### Fixed
+- `CLAUDE_AUTOSHUTDOWN_SCALE` (force the window scale when autodetection fails) now accepts only
+  0.5-4; other values (`inf`, `100`, text) are ignored with a warning on stderr instead of producing
+  an absurdly large window. The scale winner/log wiring is a tested function (`choose_window_scale`).
 - Linux HiDPI follow-up (department review): the 8 s wait for `Xft.dpi` now happens only on a
   GNOME Wayland session and stops at once when `xrdb` is missing; the `monitors.xml` fallback
   uses the layout matching the connected screens (`/sys/class/drm`); the chosen scale and its source go to the log;
