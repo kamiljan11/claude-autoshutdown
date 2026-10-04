@@ -38,6 +38,7 @@ from i18n import (
     RECONFIRM_DECLINED_LOG,
     RECONFIRM_INTRO,
     RECONFIRMED_LOG,
+    SCREEN_SCALE_LOG,
     current_language,
     set_language,
     t,
@@ -87,47 +88,115 @@ def parse_xft_scale(xrdb_output: str) -> float:
     return 1.0
 
 
-def parse_monitors_scale(monitors_xml: str) -> float:
-    """Najwieksza skala z ~/.config/monitors.xml (GNOME zapisuje tam <scale>2</scale>). Brak -> 1.0."""
-    scales = []
-    for raw in re.findall(r"<scale>\s*([0-9.]+)\s*</scale>", monitors_xml):
+DPI_BASE = 96.0           # DPI, przy ktorym Tk rysuje "1x"
+POINTS_PER_INCH = 72.0    # `tk scaling` = piksele na punkt typograficzny
+XFT_WAIT_S = 8.0          # ile czekac na Xft.dpi przy starcie sesji GNOME/Wayland
+XFT_POLL_S = 0.5
+XRDB_TIMEOUT_S = 2.0
+GUESSED_SOURCE = "monitors.xml (brak pasujacego ukladu - najwieksza)"
+SCALE_ENV = "CLAUDE_AUTOSHUTDOWN_SCALE"  # np. 2 - wymusza skale okna (gdy autodetekcja zawodzi)
+
+
+def _positive_scales(xml: str) -> list[float]:
+    out = []
+    for raw in re.findall(r"<scale>\s*([0-9.]+)\s*</scale>", xml):
         try:
-            scales.append(float(raw))
+            value = float(raw)
         except ValueError:
             continue
-    return max([s for s in scales if s > 0], default=1.0)
+        if value > 0:
+            out.append(value)
+    return out
 
 
-def linux_screen_scale(wait_s: float = 8.0) -> float:
-    """Na Linuksie (GNOME z xwayland-native-scaling) Tk widzi 96 DPI, choc ekran ma np. 200%.
+def monitors_scale_info(monitors_xml: str, connected: set[str] | None = None) -> tuple[float, bool]:
+    """(skala, czy uklad pasowal do podlaczonych ekranow) - patrz parse_monitors_scale."""
+    configs = re.findall(r"<configuration>(.*?)</configuration>", monitors_xml, re.DOTALL)
+    if connected:
+        for cfg in configs:
+            if set(re.findall(r"<connector>\s*([^<\s]+)\s*</connector>", cfg)) == connected:
+                blocks = re.findall(r"<logicalmonitor>(.*?)</logicalmonitor>", cfg, re.DOTALL)
+                primary = [v for b in blocks if re.search(r"<primary>\s*yes\s*</primary>", b)
+                           for v in _positive_scales(b)]
+                scales = primary or _positive_scales(cfg)
+                if scales:
+                    return max(scales), True
+    return max(_positive_scales(monitors_xml), default=1.0), False
 
-    GNOME podaje prawdziwe DPI aplikacjom X11 w Xft.dpi - czytamy je, zeby okno nie bylo
-    o polowe za male. Przy autostarcie zaraz po zalogowaniu Xft.dpi jeszcze nie istnieje
-    (gsd-xsettings ustawia je chwile pozniej; zaobserwowane 2026-10-03), wiec czekamy do
-    `wait_s`, a potem bierzemy skale z monitors.xml. Poza Linuksem -> 1.0.
+
+def parse_monitors_scale(monitors_xml: str, connected: set[str] | None = None) -> float:
+    """Skala z ~/.config/monitors.xml dla ukladu pasujacego do podlaczonych ekranow.
+
+    GNOME trzyma tam po jednej <configuration> na kazdy zestaw monitorow (np. sam laptop / laptop
+    z dokiem), kazda z wlasnym <primary>. Wybieramy te, ktorej zlacza (<connector>) to dokladnie
+    `connected`, i z niej skale monitora glownego. Bez dopasowania - najwieksza skala. Brak -> 1.0.
     """
-    if not sys.platform.startswith("linux"):
-        return 1.0
-    # Wyscig z gsd-xsettings wystepuje tylko w sesji GNOME na Waylandzie (XWayland). Gdzie indziej
-    # (Xvfb w CI, czysty X11) Xft.dpi moze nigdy nie powstac - tam nie czekamy ani chwili.
-    if not os.environ.get("WAYLAND_DISPLAY"):
-        wait_s = 0.0
-    deadline = time.monotonic() + wait_s
-    while True:
+    return monitors_scale_info(monitors_xml, connected)[0]
+
+
+def connected_connectors(drm: Path = Path("/sys/class/drm")) -> set[str]:
+    """Nazwy podlaczonych zlaczy (np. {"eDP-1", "HDMI-A-1"}) z /sys/class/drm/card*-*/status."""
+    found = set()
+    for status in drm.glob("card*-*/status"):
         try:
-            out = subprocess.run(["xrdb", "-query"], capture_output=True, text=True, timeout=5,
-                                 check=False).stdout
-        except (OSError, subprocess.TimeoutExpired):
-            out = ""
-        if "Xft.dpi" in out:
-            return parse_xft_scale(out)
-        if time.monotonic() >= deadline:
-            break
-        time.sleep(0.5)
+            if status.read_text().strip() == "connected":
+                found.add(status.parent.name.split("-", 1)[1])
+        except OSError:
+            continue
+    return found
+
+
+def _xrdb_query() -> str | None:
+    """Wynik `xrdb -query`.
+
+    None tylko gdy xrdb nie ma (stan trwaly). Timeout = "" (przejsciowy - czekamy dalej).
+    """
     try:
-        return parse_monitors_scale((Path.home() / ".config/monitors.xml").read_text())
+        return subprocess.run(["xrdb", "-query"], capture_output=True, text=True,
+                              timeout=XRDB_TIMEOUT_S, check=False).stdout
+    except subprocess.TimeoutExpired:
+        return ""  # XWayland jeszcze wstaje przy logowaniu
     except OSError:
-        return 1.0
+        return None
+
+
+def screen_scale_info(wait_s: float = XFT_WAIT_S, sleep=time.sleep,
+                      now=time.monotonic) -> tuple[float, str]:
+    """(skala, zrodlo). Na Linuksie (GNOME, xwayland-native-scaling) Tk widzi 96 DPI przy 200%.
+
+    GNOME podaje prawdziwe DPI aplikacjom X11 w Xft.dpi. Przy autostarcie zaraz po zalogowaniu
+    Xft.dpi jeszcze nie istnieje (gsd-xsettings ustawia je chwile pozniej; widziane 2026-10-03),
+    wiec TYLKO w sesji GNOME na Waylandzie czekamy do `wait_s`. Gdzie indziej (Xvfb w CI, KDE,
+    czysty X11) albo bez xrdb - zero czekania. Na koniec skala z monitors.xml albo 1.0.
+    """
+    forced = os.environ.get(SCALE_ENV, "").strip()
+    if forced:
+        try:
+            if float(forced) > 0:
+                return float(forced), SCALE_ENV  # recznie wymuszona - bez czekania i zgadywania
+        except ValueError:
+            pass  # zla wartosc - dalej jak zwykle (zrodlo w logu pokaze, co wygralo)
+    if not sys.platform.startswith("linux"):
+        return 1.0, "nie-Linux"
+    gnome = "GNOME" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
+    if not (os.environ.get("WAYLAND_DISPLAY") and gnome):
+        wait_s = 0.0
+    deadline = now() + wait_s
+    while True:
+        out = _xrdb_query()
+        if out is None:
+            break  # brak xrdb to stan trwaly - czekanie nic nie da
+        if "Xft.dpi" in out:
+            return parse_xft_scale(out), "Xft.dpi"
+        if now() >= deadline:
+            break
+        sleep(XFT_POLL_S)
+    try:
+        xml = (Path.home() / ".config/monitors.xml").read_text(errors="replace")
+        scale, exact = monitors_scale_info(xml, connected_connectors())
+        return scale, "monitors.xml" if exact else GUESSED_SOURCE
+    except OSError:
+        return 1.0, "domyslna"
 
 
 # Katalog stanu (config, log, plik STOP). Domyslnie obok programu; nadpisywalny,
@@ -623,12 +692,14 @@ class ClaudeAutoShutdown:
         # className = WM_CLASS; skrot .desktop (StartupWMClass) wiaze po nim ikone w docku.
         self.root = tk.Tk(className=WM_CLASS)
         # Wszystkie rozmiary podajemy logicznie i mnozymy przez skale monitora.
-        self.dpi = self.root.winfo_fpixels("1i") / 96.0
-        hidpi = linux_screen_scale()
+        self.dpi = self.root.winfo_fpixels("1i") / DPI_BASE
+        hidpi, source = screen_scale_info()
+        self._scale_source = "Tk"  # w logu zrodlo tej skali, ktora naprawde wygrala
         if hidpi > self.dpi:
             # Czcionki w punktach skaluje `tk scaling` (piksele na punkt), geometrie - px().
-            self.root.tk.call("tk", "scaling", 96.0 * hidpi / 72.0)
+            self.root.tk.call("tk", "scaling", DPI_BASE * hidpi / POINTS_PER_INCH)
             self.dpi = hidpi
+            self._scale_source = source
         self.root.title("Claude AutoShutdown")
         self._set_window_icon()
         # Rozmiar startowy przyciety do ekranu: na malym laptopie okno 1400x820
@@ -651,6 +722,9 @@ class ClaudeAutoShutdown:
             mode=t("log.mode_dry") if self.cfg["dry_run"] else t("log.mode_live"),
             action=probe.POWER_ACTIONS[self.cfg["action"]].label,
             quiet=self.cfg["quiet_seconds"], idle=self.cfg["human_idle_required"])))
+        # Diagnoza "okno za male/za duze" bez debuggera: jaka skala i skad.
+        self._append_log(log_line(t(SCREEN_SCALE_LOG, scale=f"{self.dpi:g}",
+                                    source=self._scale_source)))
 
         if AUTOARM:
             self.armed = True

@@ -236,6 +236,9 @@ cd ~/src/claude-autoshutdown
 ./install-linux.sh --autostart  # opcjonalnie start po zalogowaniu (startuje ROZBROJONY)
 ```
 
+Na ekranie HiDPI rozmiar okna bierze się z `Xft.dpi` (`xrdb`, pakiet `x11-xserver-utils`),
+a gdy go brak — z `~/.config/monitors.xml`; wybraną skalę i jej źródło widać w logu; `CLAUDE_AUTOSHUTDOWN_SCALE=2` wymusza skalę.
+
 Hibernacja jest na większości dystrybucji wyłączona (`CanHibernate = no`) — zakładka Ustawienia
 pokazuje, na co logind pozwala, a uzbrojenie odmawia akcji, której system nie wykona.
 
