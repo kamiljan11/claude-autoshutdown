@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import math
 import os
 import queue
 import re
@@ -95,6 +96,8 @@ XFT_POLL_S = 0.5
 XRDB_TIMEOUT_S = 2.0
 GUESSED_SOURCE = "monitors.xml (brak pasujacego ukladu - najwieksza)"
 SCALE_ENV = "CLAUDE_AUTOSHUTDOWN_SCALE"  # np. 2 - wymusza skale okna (gdy autodetekcja zawodzi)
+# Zakres wymuszonej skali: poza nim (np. "inf", "100") okno wychodziloby absurdalne - wartosc jest ignorowana.
+FORCED_SCALE_MIN, FORCED_SCALE_MAX = 0.5, 4.0
 
 
 def _positive_scales(xml: str) -> list[float]:
@@ -110,7 +113,12 @@ def _positive_scales(xml: str) -> list[float]:
 
 
 def monitors_scale_info(monitors_xml: str, connected: set[str] | None = None) -> tuple[float, bool]:
-    """(skala, czy uklad pasowal do podlaczonych ekranow) - patrz parse_monitors_scale."""
+    """(skala, czy uklad pasowal do podlaczonych ekranow) z ~/.config/monitors.xml.
+
+    GNOME trzyma tam po jednej <configuration> na kazdy zestaw monitorow (np. sam laptop / laptop
+    z dokiem), kazda z wlasnym <primary>. Wybieramy te, ktorej zlacza (<connector>) to dokladnie
+    `connected`, i z niej skale monitora glownego. Bez dopasowania - najwieksza skala. Brak -> 1.0.
+    """
     configs = re.findall(r"<configuration>(.*?)</configuration>", monitors_xml, re.DOTALL)
     if connected:
         for cfg in configs:
@@ -124,14 +132,13 @@ def monitors_scale_info(monitors_xml: str, connected: set[str] | None = None) ->
     return max(_positive_scales(monitors_xml), default=1.0), False
 
 
-def parse_monitors_scale(monitors_xml: str, connected: set[str] | None = None) -> float:
-    """Skala z ~/.config/monitors.xml dla ukladu pasujacego do podlaczonych ekranow.
-
-    GNOME trzyma tam po jednej <configuration> na kazdy zestaw monitorow (np. sam laptop / laptop
-    z dokiem), kazda z wlasnym <primary>. Wybieramy te, ktorej zlacza (<connector>) to dokladnie
-    `connected`, i z niej skale monitora glownego. Bez dopasowania - najwieksza skala. Brak -> 1.0.
-    """
-    return monitors_scale_info(monitors_xml, connected)[0]
+def choose_window_scale(tk_scale: float, screen_scale: float, source: str) -> tuple[float, str, bool]:
+    """(skala okna, zrodlo do logu, czy ustawic `tk scaling`). Skala wymuszona zmienna wygrywa zawsze
+    (takze w dol); inaczej wieksza z: tego, co widzi Tk, i skali ekranu (Xft.dpi / monitors.xml).
+    Zrodlo w logu = ta, ktora naprawde wygrala; gdy Tk, w nawiasie przegrana skala ekranu i jej zrodlo."""
+    if source == SCALE_ENV or screen_scale > tk_scale:
+        return screen_scale, source, True
+    return tk_scale, f"Tk (ekran {screen_scale:g}: {source})", False
 
 
 def connected_connectors(drm: Path = Path("/sys/class/drm")) -> set[str]:
@@ -170,12 +177,21 @@ def screen_scale_info(wait_s: float = XFT_WAIT_S, sleep=time.sleep,
     czysty X11) albo bez xrdb - zero czekania. Na koniec skala z monitors.xml albo 1.0.
     """
     forced = os.environ.get(SCALE_ENV, "").strip()
-    if forced:
-        try:
-            if float(forced) > 0:
-                return float(forced), SCALE_ENV  # recznie wymuszona - bez czekania i zgadywania
-        except ValueError:
-            pass  # zla wartosc - dalej jak zwykle (zrodlo w logu pokaze, co wygralo)
+    if not forced:
+        return _detected_scale(wait_s, sleep, now)
+    try:
+        value = float(forced)
+    except ValueError:
+        value = 0.0
+    if math.isfinite(value) and FORCED_SCALE_MIN <= value <= FORCED_SCALE_MAX:
+        return value, SCALE_ENV  # recznie wymuszona - bez czekania i zgadywania
+    # Zla wartosc - autodetekcja; odrzucenie widac w zrodle (log aplikacji), bo przy autostarcie nie ma konsoli.
+    scale, source = _detected_scale(wait_s, sleep, now)
+    return scale, f"{source}; {SCALE_ENV}={forced!r} odrzucona (zakres {FORCED_SCALE_MIN:g}-{FORCED_SCALE_MAX:g})"
+
+
+def _detected_scale(wait_s: float, sleep, now) -> tuple[float, str]:
+    """Autodetekcja skali (bez zmiennej): Xft.dpi z czekaniem tylko w GNOME/Wayland, potem monitors.xml."""
     if not sys.platform.startswith("linux"):
         return 1.0, "nie-Linux"
     gnome = "GNOME" in os.environ.get("XDG_CURRENT_DESKTOP", "").upper()
@@ -693,13 +709,10 @@ class ClaudeAutoShutdown:
         self.root = tk.Tk(className=WM_CLASS)
         # Wszystkie rozmiary podajemy logicznie i mnozymy przez skale monitora.
         self.dpi = self.root.winfo_fpixels("1i") / DPI_BASE
-        hidpi, source = screen_scale_info()
-        self._scale_source = "Tk"  # w logu zrodlo tej skali, ktora naprawde wygrala
-        if hidpi > self.dpi:
+        self.dpi, self._scale_source, rescale = choose_window_scale(self.dpi, *screen_scale_info())
+        if rescale:
             # Czcionki w punktach skaluje `tk scaling` (piksele na punkt), geometrie - px().
-            self.root.tk.call("tk", "scaling", DPI_BASE * hidpi / POINTS_PER_INCH)
-            self.dpi = hidpi
-            self._scale_source = source
+            self.root.tk.call("tk", "scaling", DPI_BASE * self.dpi / POINTS_PER_INCH)
         self.root.title("Claude AutoShutdown")
         self._set_window_icon()
         # Rozmiar startowy przyciety do ekranu: na malym laptopie okno 1400x820

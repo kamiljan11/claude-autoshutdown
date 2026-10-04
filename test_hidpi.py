@@ -54,8 +54,8 @@ def test_brak_xrdb_nie_wywraca(monkeypatch, tmp_path):
 def test_skala_z_monitors_xml():
     xml = "<monitors><configuration><logicalmonitor><scale>2</scale></logicalmonitor>" \
           "<logicalmonitor><scale>1.25</scale></logicalmonitor></configuration></monitors>"
-    assert app.parse_monitors_scale(xml) == 2.0
-    assert app.parse_monitors_scale("<monitors/>") == 1.0
+    assert app.monitors_scale_info(xml)[0] == 2.0
+    assert app.monitors_scale_info("<monitors/>")[0] == 1.0
 
 
 def test_autostart_przed_xft_bierze_monitors_xml(monkeypatch, tmp_path):
@@ -151,9 +151,9 @@ def _cfg(connectors: list[str], scale: float) -> str:
 def test_monitors_bierze_uklad_podlaczonych_ekranow():
     # dwa uklady, kazdy z wlasnym monitorem glownym: sam laptop 1x, laptop + dok 2x
     xml = "<monitors>" + _cfg(["eDP-1"], 1) + _cfg(["eDP-1", "HDMI-A-1"], 2) + "</monitors>"
-    assert app.parse_monitors_scale(xml, {"eDP-1"}) == 1.0
-    assert app.parse_monitors_scale(xml, {"eDP-1", "HDMI-A-1"}) == 2.0
-    assert app.parse_monitors_scale(xml, {"DP-3"}) == 2.0  # brak dopasowania -> najwieksza
+    assert app.monitors_scale_info(xml, {"eDP-1"})[0] == 1.0
+    assert app.monitors_scale_info(xml, {"eDP-1", "HDMI-A-1"})[0] == 2.0
+    assert app.monitors_scale_info(xml, {"DP-3"})[0] == 2.0  # brak dopasowania -> najwieksza
 
 
 def test_zlacza_z_sysfs(tmp_path):
@@ -192,12 +192,38 @@ def test_wymuszona_skala_bez_czekania(monkeypatch):
         raise AssertionError("nie pytac xrdb")
     monkeypatch.setattr(app, "_xrdb_query", no_xrdb)
     assert app.screen_scale_info() == (1.5, "CLAUDE_AUTOSHUTDOWN_SCALE")
-    monkeypatch.setenv("CLAUDE_AUTOSHUTDOWN_SCALE", "abc")  # zla wartosc -> zwykla detekcja
+    monkeypatch.setenv("CLAUDE_AUTOSHUTDOWN_SCALE", "abc")  # zla wartosc -> zwykla detekcja + slad w zrodle
     monkeypatch.setattr(app.sys, "platform", "win32")
-    assert app.screen_scale_info() == (1.0, "nie-Linux")
+    scale, source = app.screen_scale_info()
+    assert (scale, source.split(";")[0]) == (1.0, "nie-Linux") and "odrzucona" in source
 
 
 def test_log_odroznia_trafiony_uklad_od_zgadnietego():
     xml = "<monitors>" + _cfg(["eDP-1"], 1) + _cfg(["eDP-1", "HDMI-A-1"], 2) + "</monitors>"
     assert app.monitors_scale_info(xml, {"eDP-1"}) == (1.0, True)
     assert app.monitors_scale_info(xml, {"DP-3"}) == (2.0, False)
+
+
+@pytest.mark.parametrize("raw", ["inf", "100", "0", "-2", "nan", "abc", "0.2"])
+def test_forced_scale_out_of_range_is_ignored(monkeypatch, raw):
+    monkeypatch.setenv(app.SCALE_ENV, raw)
+    monkeypatch.setattr(app.sys, "platform", "win32")
+    scale, source = app.screen_scale_info(wait_s=0)
+    assert scale == 1.0
+    assert source.startswith("nie-Linux; ") and "odrzucona" in source and raw.strip() in source
+
+
+@pytest.mark.parametrize("raw,expected", [("2", 2.0), ("0.5", 0.5), ("4", 4.0), (" 1.25 ", 1.25)])
+def test_forced_scale_in_range_wins(monkeypatch, raw, expected):
+    monkeypatch.setenv(app.SCALE_ENV, raw)
+    assert app.screen_scale_info(wait_s=0) == (expected, app.SCALE_ENV)
+
+
+def test_choose_window_scale_logs_the_winner():
+    assert app.choose_window_scale(1.0, 2.0, "Xft.dpi") == (2.0, "Xft.dpi", True)
+    assert app.choose_window_scale(2.0, 1.0, "domyslna") == (2.0, "Tk (ekran 1: domyslna)", False)
+    assert app.choose_window_scale(1.5, 1.5, "Xft.dpi") == (1.5, "Tk (ekran 1.5: Xft.dpi)", False)
+
+
+def test_forced_scale_wins_also_downwards():
+    assert app.choose_window_scale(2.0, 0.75, app.SCALE_ENV) == (0.75, app.SCALE_ENV, True)
