@@ -102,7 +102,7 @@ jobs:
       - name: Werdykt
         id: verdict
         env:
-          CLI_OUTCOME: ${{ steps.cli.outcome }}
+          CLI_OUTCOME: ${{ steps.cli.outcome }}   # wynik INSTALACJI CLI (krok cli), nie recenzji
         run: |
           python3 - <<'PY'
           import json, os, re
@@ -121,73 +121,80 @@ jobs:
               jedna_linia = re.sub(r'::', ': :', re.sub(r'[\r\n]+', ' | ', opis))   # poza f-stringiem: Python < 3.12
               print(f'pg-review: {werdykt} — {jedna_linia}')
               raise SystemExit(0)
-          if not os.path.exists(f'{tmp}/diff.patch'):
-              koniec('INFRA', 'brak sekretu CLAUDE_CODE_OAUTH_TOKEN — brak dowodu recenzji')
-          if os.path.exists(f'{tmp}/za-duzy'):
-              koniec('INFRA', open(f'{tmp}/za-duzy').read().strip() + ' — recenzja lokalna (pg-review --recenzja)')
-          if os.environ.get('CLI_OUTCOME') == 'failure':
-              koniec('INFRA', 'instalacja CLI (npm) nie powiodla sie po 3 probach — nowy commit uruchomi recenzje ponownie')
-          try:
-              out = json.load(open(f'{tmp}/out.json'))
-          except (OSError, ValueError):
-              koniec('INFRA', 'CLI nie oddalo wyniku (limit subskrypcji / timeout?)')
-          if out.get('is_error'):
-              koniec('INFRA', 'blad CLI: ' + re.sub(r'::', ': :', re.sub(r'[\r\n]+', ' | ', str(out.get('result', ''))[:300])))
-          if out.get('permission_denials'):
-              koniec('INFRA', f"odmowy narzedzi w recenzji: {str(out.get('permission_denials'))[:200]}")
-          surowy = str(out.get('result', ''))
-          # JSON na poczatku, w bloku ```json albo od pierwszej `{` (pilot: recenzent pisal zdanie przed blokiem).
-          obj = None
-          plot = re.search(r'```(?:json)?\s*(\{)', surowy)
-          for start in [len(surowy) - len(surowy.lstrip())] + ([plot.start(1)] if plot else []) + [surowy.find('{')]:
+          def ocena():
+              if not os.path.exists(f'{tmp}/diff.patch'):
+                  koniec('INFRA', 'brak sekretu CLAUDE_CODE_OAUTH_TOKEN — brak dowodu recenzji')
+              if os.path.exists(f'{tmp}/za-duzy'):
+                  koniec('INFRA', open(f'{tmp}/za-duzy').read().strip() + ' — recenzja lokalna (pg-review --recenzja)')
+              if os.environ.get('CLI_OUTCOME') == 'failure':
+                  koniec('INFRA', 'instalacja CLI (npm) nie powiodla sie po 3 probach — nowy commit uruchomi recenzje ponownie')
               try:
-                  kandydat, _ = json.JSONDecoder().raw_decode(surowy[start:]) if start >= 0 else (None, 0)
-              except ValueError:
-                  continue
-              if isinstance(kandydat, dict):
-                  obj = kandydat
-                  break
-          # Odrzucenie w DOWOLNYM formacie (proza, inna pisownia werdyktu) = REQUEST_CHANGES, nie INFRA — inaczej darmowe
-          # ponowne losowanie recenzji (data-review r9). Zapisywane przed kontrolami kompletnosci.
-          werdykt = re.sub(r'[\s-]+', '_', str(obj.get('verdict') or '').strip()).upper() if isinstance(obj, dict) else ''
-          werdykt = {'APPROVED': 'APPROVE', 'LGTM': 'APPROVE'}.get(werdykt, werdykt)
-          # Proza: tylko dokladny token z kontraktu (r11: „I would not reject" nie jest odrzuceniem; proza = INFRA).
-          # RC tylko dla znanych wartosci odrzucenia; null/nieznany werdykt = INFRA (r11: flake formatu nie zamyka PR na stale).
-          odrzucenie = werdykt in ('REQUEST_CHANGES', 'CHANGES_REQUESTED', 'REJECT', 'REJECTED')
-          if odrzucenie or (not isinstance(obj, dict) and re.search(r'\bREQUEST_CHANGES\b', surowy)):
-              # Czlowiek musi widziec POWOD odrzucenia (pilot 2026-10-04: podsumowanie bez findings) — lista albo surowy wynik.
-              fs = obj.get('findings') if isinstance(obj, dict) and isinstance(obj.get('findings'), list) else []
-              powody = '\n'.join(f"- **{f.get('severity')}** `{f.get('rule_id')}` {f.get('file')}:{f.get('line')} — {str(f.get('claim', ''))[:500]}"
-                                 for f in fs if isinstance(f, dict)) or surowy[:3000]
-              koniec('REQUEST_CHANGES', f'recenzent odrzucil zmiane (zapisane niezaleznie od formatu i kompletnosci wyniku)\n\n{powody}')
-          if not isinstance(obj, dict):
-              koniec('INFRA', 'wynik recenzenta nie zaczyna sie od obiektu JSON')
-          if int(out.get('num_turns') or 0) < 2:
-              koniec('INFRA', 'recenzent nie uzyl narzedzi (num_turns < 2) — brak dowodu pracy')
-          findings = obj.get('findings')
-          if not isinstance(findings, list):
-              koniec('INFRA', 'brak tablicy findings')
-          if obj.get('diff_sha256') != open(f'{tmp}/diff.sha').read().strip():
-              koniec('INFRA', 'wynik nie odnosi sie do tego diffu (diff_sha256)')
-          linii = open(f'{tmp}/diff.patch', 'rb').read().count(b'\n')   # jak `wc -l` (samotne \r nie licza sie)
+                  out = json.load(open(f'{tmp}/out.json'))
+              except (OSError, ValueError):
+                  koniec('INFRA', 'CLI nie oddalo wyniku (limit subskrypcji / timeout?)')
+              if out.get('is_error'):
+                  koniec('INFRA', 'blad CLI: ' + re.sub(r'::', ': :', re.sub(r'[\r\n]+', ' | ', str(out.get('result', ''))[:300])))
+              if out.get('permission_denials'):
+                  koniec('INFRA', f"odmowy narzedzi w recenzji: {str(out.get('permission_denials'))[:200]}")
+              surowy = str(out.get('result', ''))
+              # JSON na poczatku, w bloku ```json albo od pierwszej `{` (pilot: recenzent pisal zdanie przed blokiem).
+              obj = None
+              plot = re.search(r'```(?:json)?\s*(\{)', surowy)
+              for start in [len(surowy) - len(surowy.lstrip())] + ([plot.start(1)] if plot else []) + [surowy.find('{')]:
+                  try:
+                      kandydat, _ = json.JSONDecoder().raw_decode(surowy[start:]) if start >= 0 else (None, 0)
+                  except ValueError:
+                      continue
+                  if isinstance(kandydat, dict):
+                      obj = kandydat
+                      break
+              # Odrzucenie w DOWOLNYM formacie (proza, inna pisownia werdyktu) = REQUEST_CHANGES, nie INFRA — inaczej darmowe
+              # ponowne losowanie recenzji (data-review r9). Zapisywane przed kontrolami kompletnosci.
+              werdykt = re.sub(r'[\s-]+', '_', str(obj.get('verdict') or '').strip()).upper() if isinstance(obj, dict) else ''
+              werdykt = {'APPROVED': 'APPROVE', 'LGTM': 'APPROVE'}.get(werdykt, werdykt)
+              # Proza: tylko dokladny token z kontraktu (r11: „I would not reject" nie jest odrzuceniem; proza = INFRA).
+              # RC tylko dla znanych wartosci odrzucenia; null/nieznany werdykt = INFRA (r11: flake formatu nie zamyka PR na stale).
+              odrzucenie = werdykt in ('REQUEST_CHANGES', 'CHANGES_REQUESTED', 'REJECT', 'REJECTED')
+              if odrzucenie or (not isinstance(obj, dict) and re.search(r'\bREQUEST_CHANGES\b', surowy)):
+                  # Czlowiek musi widziec POWOD odrzucenia (pilot 2026-10-04: podsumowanie bez findings) — lista albo surowy wynik.
+                  fs = obj.get('findings') if isinstance(obj, dict) and isinstance(obj.get('findings'), list) else []
+                  powody = '\n'.join(f"- **{f.get('severity')}** `{f.get('rule_id')}` {f.get('file')}:{f.get('line')} — {str(f.get('claim', ''))[:500]}"
+                                     for f in fs if isinstance(f, dict)) or surowy[:3000]
+                  koniec('REQUEST_CHANGES', f'recenzent odrzucil zmiane (zapisane niezaleznie od formatu i kompletnosci wyniku)\n\n{powody}')
+              if not isinstance(obj, dict):
+                  koniec('INFRA', 'wynik recenzenta nie zaczyna sie od obiektu JSON')
+              if int(out.get('num_turns') or 0) < 2:
+                  koniec('INFRA', 'recenzent nie uzyl narzedzi (num_turns < 2) — brak dowodu pracy')
+              findings = obj.get('findings')
+              if not isinstance(findings, list):
+                  koniec('INFRA', 'brak tablicy findings')
+              if obj.get('diff_sha256') != open(f'{tmp}/diff.sha').read().strip():
+                  koniec('INFRA', 'wynik nie odnosi sie do tego diffu (diff_sha256)')
+              linii = open(f'{tmp}/diff.patch', 'rb').read().count(b'\n')   # jak `wc -l` (samotne \r nie licza sie)
+              try:
+                  przeczytane = int(obj.get('diff_lines_read') or 0)
+              except (TypeError, ValueError):
+                  koniec('INFRA', f"diff_lines_read nie jest liczba: {str(obj.get('diff_lines_read'))[:40]}")
+              if przeczytane < linii:
+                  koniec('INFRA', f"recenzent przeczytal {obj.get('diff_lines_read')} z {linii} linii diffu — recenzja niepelna")
+              ciezkie = [f for f in findings if not isinstance(f, dict) or str(f.get('severity', '')).strip().lower() not in ('minor', 'info')
+                         or not f.get('evidence') or not f.get('file')]
+              def czysty(x):  # tekst z diffu/LLM bez nowych linii i `::` — nie wstrzyknie komend runnera (adnotacji)
+                  return re.sub(r'::', ': :', re.sub(r'[\r\n]+', ' | ', str(x)))
+              lista = '\n'.join(f"- **{czysty(f.get('severity'))}** `{czysty(f.get('rule_id'))}` {czysty(f.get('file'))}:{czysty(f.get('line'))} — {czysty(str(f.get('claim', ''))[:300])}"
+                                for f in findings if isinstance(f, dict))
+              # Ciezkie findings = odrzucenie NIEZALEZNIE od pola verdict (ops r11b: null + blocker dawalo INFRA = ponowne losowanie).
+              if ciezkie:
+                  koniec('REQUEST_CHANGES', f'blocker/major albo bez evidence: {len(ciezkie)}\n\n{lista}')
+              if werdykt != 'APPROVE':
+                  koniec('INFRA', f'nieznany werdykt: {werdykt[:40] or "brak"}')
+              koniec('APPROVE', f'{len(findings)} findings minor\n\n{lista}')
           try:
-              przeczytane = int(obj.get('diff_lines_read') or 0)
-          except (TypeError, ValueError):
-              koniec('INFRA', f"diff_lines_read nie jest liczba: {str(obj.get('diff_lines_read'))[:40]}")
-          if przeczytane < linii:
-              koniec('INFRA', f"recenzent przeczytal {obj.get('diff_lines_read')} z {linii} linii diffu — recenzja niepelna")
-          ciezkie = [f for f in findings if not isinstance(f, dict) or str(f.get('severity', '')).strip().lower() not in ('minor', 'info')
-                     or not f.get('evidence') or not f.get('file')]
-          def czysty(x):  # tekst z diffu/LLM bez nowych linii i `::` — nie wstrzyknie komend runnera (adnotacji)
-              return re.sub(r'::', ': :', re.sub(r'[\r\n]+', ' | ', str(x)))
-          lista = '\n'.join(f"- **{czysty(f.get('severity'))}** `{czysty(f.get('rule_id'))}` {czysty(f.get('file'))}:{czysty(f.get('line'))} — {czysty(str(f.get('claim', ''))[:300])}"
-                            for f in findings if isinstance(f, dict))
-          # Ciezkie findings = odrzucenie NIEZALEZNIE od pola verdict (ops r11b: null + blocker dawalo INFRA = ponowne losowanie).
-          if ciezkie:
-              koniec('REQUEST_CHANGES', f'blocker/major albo bez evidence: {len(ciezkie)}\n\n{lista}')
-          if werdykt != 'APPROVE':
-              koniec('INFRA', f'nieznany werdykt: {werdykt[:40] or "brak"}')
-          koniec('APPROVE', f'{len(findings)} findings minor\n\n{lista}')
+              ocena()
+          except SystemExit:
+              raise
+          except Exception as blad:  # nieprzewidziany ksztalt wyniku = INFRA, nie czerwony job (pilot 2026-10-04)
+              koniec('INFRA', f'blad parsera wyniku: {type(blad).__name__}')
           PY
 
   pg-review:
