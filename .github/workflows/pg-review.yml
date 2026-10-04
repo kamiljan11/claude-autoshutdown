@@ -6,6 +6,9 @@ name: pg-review
 # Bez sekretu, przy bledzie infrastruktury (limit subskrypcji, timeout, nieczytelny wynik) albo za duzym diffie check
 # `pg-review` jest SKIPPED: brak dowodu (pg-merge odmowi T1/T2), ale bez czerwieni blokujacej inne PR (ops-review).
 # TYLKO OAuth/subskrypcja (`claude setup-token`) — zero platnych tokenow API (decyzja Kamila 2026-08-09).
+# NIE ustawiaj `pg-review` jako required status check w ochronie galezi: GitHub traktuje SKIPPED (INFRA) jak zaliczony.
+# Dowod czyta wylacznie pg-merge-bezpieczny.py (skipped = brak dowodu = odmowa); mas_branch_protect.py go nie wymaga.
+# Read poza katalogiem roboczym i $RUNNER_TEMP konczy sie permission_denials -> INFRA (sprawdzone na CLI 2.1.283).
 
 on:
   pull_request:
@@ -106,6 +109,7 @@ jobs:
           tmp = os.environ['RUNNER_TEMP']
           def koniec(werdykt, opis):
               sha = open(f'{tmp}/diff.sha').read().strip() if os.path.exists(f'{tmp}/diff.sha') else '-'
+              opis = re.sub(r'sk-ant-[A-Za-z0-9_-]+', '[REDACTED]', opis)   # tokeny Anthropic nigdy w summary/logu (pilot)
               # Adnotacja (Checks API) = historia werdyktow PR dla pg-merge: REQUEST_CHANGES na tym samym diffie blokuje
               # ponowne losowanie recenzji pustym commitem (security-review 2026-10-04).
               print(f'::notice title=pg-review-verdict::{werdykt} {sha}')
@@ -114,7 +118,8 @@ jobs:
               with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as s:
                   s.write(f'## pg-review: {werdykt}\n\n{opis}\n')
               # stdout bez nowych linii i `::` — tekst z LLM nie wstrzyknie komend runnera (security/code r10); summary = plik, bez zmian.
-              print(f"pg-review: {werdykt} — {re.sub(r'::', ': :', re.sub(r'[\r\n]+', ' | ', opis))}")
+              jedna_linia = re.sub(r'::', ': :', re.sub(r'[\r\n]+', ' | ', opis))   # poza f-stringiem: Python < 3.12
+              print(f'pg-review: {werdykt} — {jedna_linia}')
               raise SystemExit(0)
           if not os.path.exists(f'{tmp}/diff.patch'):
               koniec('INFRA', 'brak sekretu CLAUDE_CODE_OAUTH_TOKEN — brak dowodu recenzji')
@@ -131,11 +136,17 @@ jobs:
           if out.get('permission_denials'):
               koniec('INFRA', f"odmowy narzedzi w recenzji: {str(out.get('permission_denials'))[:200]}")
           surowy = str(out.get('result', ''))
-          tekst = re.sub(r'^\s*```(?:json)?\s*', '', surowy).lstrip()
-          try:
-              obj, _ = json.JSONDecoder().raw_decode(tekst)
-          except ValueError:
-              obj = None
+          # JSON na poczatku, w bloku ```json albo od pierwszej `{` (pilot: recenzent pisal zdanie przed blokiem).
+          obj = None
+          plot = re.search(r'```(?:json)?\s*(\{)', surowy)
+          for start in [len(surowy) - len(surowy.lstrip())] + ([plot.start(1)] if plot else []) + [surowy.find('{')]:
+              try:
+                  kandydat, _ = json.JSONDecoder().raw_decode(surowy[start:]) if start >= 0 else (None, 0)
+              except ValueError:
+                  continue
+              if isinstance(kandydat, dict):
+                  obj = kandydat
+                  break
           # Odrzucenie w DOWOLNYM formacie (proza, inna pisownia werdyktu) = REQUEST_CHANGES, nie INFRA — inaczej darmowe
           # ponowne losowanie recenzji (data-review r9). Zapisywane przed kontrolami kompletnosci.
           werdykt = re.sub(r'[\s-]+', '_', str(obj.get('verdict') or '').strip()).upper() if isinstance(obj, dict) else ''
@@ -171,11 +182,12 @@ jobs:
               return re.sub(r'::', ': :', re.sub(r'[\r\n]+', ' | ', str(x)))
           lista = '\n'.join(f"- **{czysty(f.get('severity'))}** `{czysty(f.get('rule_id'))}` {czysty(f.get('file'))}:{czysty(f.get('line'))} — {czysty(str(f.get('claim', ''))[:300])}"
                             for f in findings if isinstance(f, dict))
+          # Ciezkie findings = odrzucenie NIEZALEZNIE od pola verdict (ops r11b: null + blocker dawalo INFRA = ponowne losowanie).
+          if ciezkie:
+              koniec('REQUEST_CHANGES', f'blocker/major albo bez evidence: {len(ciezkie)}\n\n{lista}')
           if werdykt != 'APPROVE':
               koniec('INFRA', f'nieznany werdykt: {werdykt[:40] or "brak"}')
-          if not ciezkie:
-              koniec('APPROVE', f'{len(findings)} findings minor\n\n{lista}')
-          koniec('REQUEST_CHANGES', f'blocker/major albo bez evidence: {len(ciezkie)}\n\n{lista}')
+          koniec('APPROVE', f'{len(findings)} findings minor\n\n{lista}')
           PY
 
   pg-review:
