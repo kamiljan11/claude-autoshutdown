@@ -6,6 +6,7 @@ this file starts at the point it was introduced, so earlier history lives in the
 ## [Unreleased]
 
 ### Added
+- `pg-review` CI workflow (`.github/workflows/pg-review.yml`): every pull request gets a read-only Claude review on a fresh GitHub runner; a green `pg-review` check counts as review evidence for auto-merge. Runs on the `CLAUDE_CODE_OAUTH_TOKEN` subscription secret; without the secret or on an infrastructure error the check is skipped, not red. It is not a required status check.
 - **Linux support** (systemd; verified on Ubuntu 26.04 GNOME Wayland): `linuxprobe.py` backend
   (`/proc`, logind power actions without `sudo`, idle time from GNOME Mutter or `xprintidle`),
   `probe.py` backend selector, `install-linux.sh` (app-menu + desktop shortcut, optional
